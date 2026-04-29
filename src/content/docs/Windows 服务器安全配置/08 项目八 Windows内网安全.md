@@ -1,5 +1,6 @@
 ---
 title: 08.项目八 Windows内网安全
+slug: /windows-server-security/08-intranet-security
 ---
 
 # 08.项目八 Windows内网安全

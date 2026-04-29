@@ -1,5 +1,6 @@
 ---
 title: 实验七：后门持久化与WebShell攻防
+slug: /windows-server-security/lab7-backdoor-webshell
 ---
 
 # 实验七：后门持久化与WebShell攻防

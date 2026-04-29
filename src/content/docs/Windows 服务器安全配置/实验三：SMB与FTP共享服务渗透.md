@@ -1,5 +1,6 @@
 ---
 title: 实验三：SMB与FTP共享服务渗透
+slug: /windows-server-security/lab3-smb-ftp
 ---
 
 # 实验三：SMB与FTP共享服务渗透

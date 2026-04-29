@@ -1,5 +1,6 @@
 ---
 title: 01.项目一 SQL Server 2008基础
+slug: /database-admin/01-sql-server-basics
 ---
 
 # 01.项目一 SQL Server 2008基础

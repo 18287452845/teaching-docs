@@ -1,5 +1,6 @@
 ---
 title: 实验五：RDP远程桌面安全渗透
+slug: /windows-server-security/lab5-rdp
 ---
 
 # 实验五：RDP远程桌面安全渗透

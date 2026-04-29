@@ -1,5 +1,6 @@
 ---
 title: 实验：初识渗透测试——Nmap信息收集与RDP弱口令演示
+slug: /windows-server-security/01-intro/lab-nmap-rdp
 ---
 
 # 实验：初识渗透测试——Nmap信息收集与RDP弱口令演示

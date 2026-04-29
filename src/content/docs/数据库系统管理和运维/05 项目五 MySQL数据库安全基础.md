@@ -1,5 +1,6 @@
 ---
 title: 05.项目五 MySQL数据库安全基础
+slug: /database-admin/05-mysql-basics
 ---
 
 # 05.项目五 MySQL数据库安全基础

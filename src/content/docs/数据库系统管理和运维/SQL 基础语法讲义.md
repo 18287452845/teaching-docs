@@ -1,5 +1,6 @@
 ---
 title: SQL 基础语法讲义
+slug: /database-admin/sql-basics
 ---
 
 # SQL 基础语法讲义

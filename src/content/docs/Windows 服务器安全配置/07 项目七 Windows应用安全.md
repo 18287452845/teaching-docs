@@ -1,5 +1,6 @@
 ---
 title: 任务一 Windows应用后门
+slug: /windows-server-security/07-app-security
 ---
 
 # 任务一 Windows应用后门

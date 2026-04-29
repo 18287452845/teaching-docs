@@ -1,5 +1,6 @@
 ---
 title: 02.项目二 Windows服务器用户管理
+slug: /windows-server-security/02-user-management
 ---
 
 # 02.项目二 Windows服务器用户管理
@@ -875,4 +876,4 @@ Get-HotFix -Id KB4601319
 > ⚠️ **免责声明**：以上操作仅用于授权渗透测试和安全教学环境，在未授权系统上使用属于违法行为。
 > 
 
-[项目二 教学逐字稿（约90分钟）](项目二 Windows服务器用户管理/项目二 教学逐字稿（约90分钟） fd62a11bdffb4b79b1433d4bd64c958a.md)
+[项目二 教学逐字稿（约90分钟）](%E9%A1%B9%E7%9B%AE%E4%BA%8C%20Windows%E6%9C%8D%E5%8A%A1%E5%99%A8%E7%94%A8%E6%88%B7%E7%AE%A1%E7%90%86/%E9%A1%B9%E7%9B%AE%E4%BA%8C%20%E6%95%99%E5%AD%A6%E9%80%90%E5%AD%97%E7%A8%BF%EF%BC%88%E7%BA%A690%E5%88%86%E9%92%9F%EF%BC%89%20fd62a11bdffb4b79b1433d4bd64c958a.md)
