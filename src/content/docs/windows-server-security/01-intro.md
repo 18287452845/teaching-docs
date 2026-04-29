@@ -1,6 +1,5 @@
 ---
 title: 01.项目一 走进Windows服务器
-slug: /windows-server-security/01-intro
 ---
 
 # 01.项目一 走进Windows服务器

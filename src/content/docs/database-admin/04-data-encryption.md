@@ -1,6 +1,5 @@
 ---
 title: 04.项目四 数据加密
-slug: /database-admin/04-data-encryption
 ---
 
 # 04.项目四 数据加密

@@ -1,6 +1,5 @@
 ---
 title: 05.项目五 Windows服务器远程管理
-slug: /windows-server-security/05-remote-management
 ---
 
 # 05.项目五 Windows服务器远程管理

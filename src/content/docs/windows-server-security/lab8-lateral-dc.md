@@ -1,6 +1,5 @@
 ---
 title: 实验八：内网横向移动与域控攻陷
-slug: /windows-server-security/lab8-lateral-dc
 ---
 
 # 实验八：内网横向移动与域控攻陷

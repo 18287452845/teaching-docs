@@ -1,6 +1,5 @@
 ---
-title: 06 项目六 Windows域管理
-slug: /windows-server-security/06-domain-management
+title: 06.项目六 Windows域管理
 ---
 
 

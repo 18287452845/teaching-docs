@@ -1,6 +1,5 @@
 ---
 title: 03.项目三 Windows服务器共享管理
-slug: /windows-server-security/03-share-management
 ---
 
 # 03.项目三 Windows服务器共享管理

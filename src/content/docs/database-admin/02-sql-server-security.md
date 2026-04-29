@@ -1,6 +1,5 @@
 ---
 title: 02.项目二 SQL Server 2008安全管理
-slug: /database-admin/02-sql-server-security
 ---
 
 # 02.项目二 SQL Server 2008安全管理

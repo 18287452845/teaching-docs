@@ -1,6 +1,5 @@
 ---
 title: 实验六：Windows域环境渗透与提权
-slug: /windows-server-security/lab6-domain-privesc
 ---
 
 # 实验六：Windows域环境渗透与提权

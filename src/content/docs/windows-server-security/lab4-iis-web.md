@@ -1,6 +1,5 @@
 ---
 title: 实验四：IIS Web服务安全审计与渗透
-slug: /windows-server-security/lab4-iis-web
 ---
 
 # 实验四：IIS Web服务安全审计与渗透

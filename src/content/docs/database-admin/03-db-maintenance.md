@@ -1,6 +1,5 @@
 ---
-title: 项目三 数据库维护
-slug: /database-admin/03-db-maintenance
+title: 03.项目三 数据库维护
 ---
 
 # 项目三 数据库维护

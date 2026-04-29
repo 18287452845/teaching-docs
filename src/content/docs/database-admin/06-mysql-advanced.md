@@ -1,6 +1,5 @@
 ---
 title: 06.项目六 MySQL数据库高级安全维护
-slug: /database-admin/06-mysql-advanced
 ---
 
 # 06.项目六 MySQL数据库高级安全维护

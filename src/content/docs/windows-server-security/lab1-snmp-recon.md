@@ -1,6 +1,5 @@
 ---
 title: 实验一：服务器信息收集与SNMP枚举渗透
-slug: /windows-server-security/lab1-snmp-recon
 ---
 
 # 实验一：服务器信息收集与SNMP枚举渗透

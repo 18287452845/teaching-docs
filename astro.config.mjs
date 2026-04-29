@@ -12,11 +12,11 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Windows 服务器安全配置',
-          autogenerate: { directory: 'Windows 服务器安全配置' },
+          autogenerate: { directory: 'windows-server-security' },
         },
         {
           label: '数据库系统管理和运维',
-          autogenerate: { directory: '数据库系统管理和运维' },
+          autogenerate: { directory: 'database-admin' },
         },
       ],
       lastUpdated: true,

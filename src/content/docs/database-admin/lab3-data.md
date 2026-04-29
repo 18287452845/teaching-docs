@@ -1,6 +1,5 @@
 ---
 title: 实验三 数据
-slug: /database-admin/lab3-data
 ---
 
 # 实验三 数据

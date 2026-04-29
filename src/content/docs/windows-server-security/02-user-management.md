@@ -1,6 +1,5 @@
 ---
 title: 02.项目二 Windows服务器用户管理
-slug: /windows-server-security/02-user-management
 ---
 
 # 02.项目二 Windows服务器用户管理

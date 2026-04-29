@@ -1,6 +1,5 @@
 ---
 title: README
-slug: /database-admin/lab3-data/readme
 ---
 
 # README
