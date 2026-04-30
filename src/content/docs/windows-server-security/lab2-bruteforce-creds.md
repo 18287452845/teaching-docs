@@ -1,5 +1,5 @@
 ---
-title: 实验二：用户账户暴力破解与凭据提取渗透
+title: "实验二：用户账户暴力破解与凭据提取渗透"
 ---
 
 # 实验二：用户账户暴力破解与凭据提取渗透
@@ -462,7 +462,7 @@ xfreerdp3 /v:192.168.1.20 /u:weakadmin /p:admin123 /cert:tofu
 
 **本阶段目标**：不满足于单个账户的明文密码，要从 LSASS 进程内存中一次性导出**所有已登录会话**的明文密码和 NTLM 哈希，实现凭据面的横向扩散。
 
-**知识衔接**：前置知识 §2.2 描绘了 LSASS 作为"凭据活存储"的结构——只要具备 SeDebugPrivilege，就可以通过调试 API 读取其内存。Mimikatz 的 `privilege::debug` + `sekurlsa::logonpasswords` 正是这一理论的工程实现。
+**知识衔接**：前置知识 §2.2 描绘了 LSASS 作为"凭据活存储"的结构——只要具备 SeDebugPrivilege，就可以通过调试 API 读取其内存。Mimikatz 的 `privilege==debug` + `sekurlsa==logonpasswords` 正是这一理论的工程实现。
 
 </aside>
 

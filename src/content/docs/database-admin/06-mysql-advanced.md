@@ -1,9 +1,8 @@
 ---
-title: 06.项目六 MySQL数据库高级安全维护
+title: "06.项目六 MySQL数据库高级安全维护"
 ---
 
 # 06.项目六 MySQL数据库高级安全维护
-
 
 # 任务一 使用Navicat进行MySQL数据库的维护
 

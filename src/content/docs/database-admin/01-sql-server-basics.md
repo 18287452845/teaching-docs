@@ -1,12 +1,8 @@
 ---
-title: 01.项目一 SQL Server 2008基础
+title: "01.项目一 SQL Server 2008基础"
 ---
 
 # 01.项目一 SQL Server 2008基础
-
-# 01.项目一 SQL Server 2008基础
-
-# 项目一 SQL Server 2008基础
 
 🎯
 

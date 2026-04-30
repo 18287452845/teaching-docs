@@ -1,12 +1,8 @@
 ---
-title: 02.项目二 SQL Server 2008安全管理
+title: "02.项目二 SQL Server 2008安全管理"
 ---
 
 # 02.项目二 SQL Server 2008安全管理
-
-# 02.项目二 SQL Server 2008安全管理
-
-# 项目二 SQL Server 2008安全管理
 
 ## 🎯 学习目标
 

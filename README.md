@@ -1,49 +1,38 @@
-# Starlight Starter Kit: Basics
+# docs-site
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+`docs-site` 是基于 Astro + Starlight 的静态文档站点，用来承接 `../tnote` 中整理好的 Obsidian 内容，并作为 GitHub / Cloudflare Pages 的发布目录。
 
-```
-npm create astro@latest -- --template starlight
-```
+## 常用命令
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
-
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+```bash
+node -v
+pnpm install
+pnpm sync
+pnpm dev
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+命令说明：
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+- `pnpm sync`: 从 `../tnote/课程讲义` 同步 Markdown 到 `src/content/docs/`
+- `pnpm sync:show`: 查看当前源文件和站点文件的映射关系
+- `pnpm dev`: 本地启动站点
+- `pnpm build`: 仅构建当前站点内容
+- `pnpm build:local`: 先同步，再构建
+- `pnpm check`: 运行 Astro 内容检查
 
-Static assets, like favicons, can be placed in the `public/` directory.
+运行当前项目前，请确认 `Node.js >= 22.12.0`。
 
-## 🧞 Commands
+## 目录约定
 
-All commands are run from the root of the project, from a terminal:
+- `src/content/docs/`: Starlight 实际读取的文档目录
+- `mapping.json`: 源文件到站点路由文件名的映射表
+- `sync.py`: 同步脚本
+- `scripts/run-sync.mjs`: 跨平台同步入口
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+## Cloudflare Pages
 
-## 👀 Want to learn more?
+如果把当前 `docs-site` 目录单独推送到 GitHub 仓库，Cloudflare Pages 可使用以下配置：
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+- Build command: `pnpm install --frozen-lockfile && pnpm build`
+- Build output directory: `dist`
+- Node.js: 22.12+

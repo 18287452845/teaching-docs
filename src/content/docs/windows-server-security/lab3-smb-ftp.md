@@ -1,8 +1,6 @@
 ---
-title: 实验三：SMB与FTP共享服务渗透
+title: "实验三：SMB与FTP共享服务渗透"
 ---
-
-# 实验三：SMB与FTP共享服务渗透
 
 # 实验三：SMB与FTP共享服务渗透
 

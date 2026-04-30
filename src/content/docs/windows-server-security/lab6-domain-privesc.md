@@ -1,8 +1,6 @@
 ---
-title: 实验六：Windows域环境渗透与提权
+title: "实验六：Windows域环境渗透与提权"
 ---
-
-# 实验六：Windows域环境渗透与提权
 
 # 实验六：Windows域环境渗透与提权
 

@@ -1,7 +1,7 @@
 ---
-title: 实验三 数据
+title: "实验三 数据"
 ---
 
 # 实验三 数据
 
-[README](%E5%AE%9E%E9%AA%8C%E4%B8%89%20%E6%95%B0%E6%8D%AE/README%20347e41ea95f58104a84af858b23a4671.md)
+[README](/database-admin/lab3-data-sub/)

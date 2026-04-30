@@ -1,12 +1,8 @@
 ---
-title: 03.项目三 Windows服务器共享管理
+title: "03.项目三 Windows服务器共享管理"
 ---
 
 # 03.项目三 Windows服务器共享管理
-
-# 03.项目三 Windows服务器共享管理
-
-# 项目三 Windows服务器共享管理
 
 # 任务一 Windows文件共享基础搭建
 
