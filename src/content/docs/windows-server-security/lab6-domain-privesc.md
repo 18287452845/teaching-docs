@@ -170,6 +170,11 @@ title: "实验六：Windows域环境渗透与提权"
 
 这里建议边做边记。域环境中的很多故障，最后都能追溯到最开始的主机名、DNS 或林初始化参数没有配对。
 
+可以使用以下两种方式完成：
+
+- 方式一：PowerShell 自动化安装
+- 方式二：Windows Server 图形界面安装
+
 在 Windows Server 上使用管理员 PowerShell 执行：
 
 ```powershell
@@ -191,9 +196,44 @@ Install-ADDSForest `
   -Force
 ```
 
+如果更习惯图形界面，也可以按下面的路径操作。
+
+**GUI 操作方式**
+
+1. 修改主机名：
+   打开“服务器管理器” -> “本地服务器” -> 点击“计算机名”右侧当前名称 -> “更改” -> 输入 `DC01` -> 确定并重启。
+2. 安装 AD DS 与 DNS 角色：
+   打开“服务器管理器” -> “管理” -> “添加角色和功能”。
+3. 在“安装类型”中选择“基于角色或基于功能的安装”。
+4. 在“服务器角色”中勾选：
+   - `Active Directory 域服务`
+   - `DNS 服务器`
+   遇到“添加功能”提示时选择“添加功能”。
+5. 一直“下一步”直到“确认”页，点击“安装”。
+6. 安装完成后，在“服务器管理器”右上角会出现黄色感叹号，点击“将此服务器提升为域控制器”。
+7. 在“部署配置”中选择“添加新林”，根域名填写：
+   - `corp.local`
+8. 在“域控制器选项”中：
+   - 保持勾选 `DNS 服务器`
+   - 保持勾选 `全局编录`
+   - DSRM 密码填写示例：`P@ssw0rd123!`
+9. 后续页面保持默认或按提示继续，直到“先决条件检查”通过后点击“安装”。
+10. 安装结束后服务器会自动重启。重启完成后，使用 `CORP\\Administrator` 登录。
+
+**GUI 完成后应验证**
+
+- “服务器管理器”首页能看到 `AD DS` 和 `DNS` 角色。
+- “工具”菜单中能打开：
+  - `Active Directory 用户和计算机`
+  - `Active Directory 域和信任关系`
+  - `DNS`
+- 运行 `sysdm.cpl` 或在“本地服务器”页面检查时，计算机应显示已加入 `corp.local` 域。
+
 #### 3.3.2 创建实验对象
 
 下面这段脚本的目的，不是让大家背命令，而是让大家明确域里哪些对象是“普通用户”、哪些是“服务账户”、哪些对象将来会成为攻击链的关键节点。口令均为靶场示例，实验后应重置或删除。
+
+同样可以使用 PowerShell 或图形界面两种方式创建。
 
 ```powershell
 Import-Module ActiveDirectory
@@ -226,6 +266,46 @@ Set-ADUser -Identity "sqlsvc" -ServicePrincipalNames @{
   Add = "MSSQLSvc/dc01.corp.local:1433"
 }
 ```
+
+**GUI 操作方式**
+
+1. 打开“服务器管理器” -> “工具” -> `Active Directory 用户和计算机`。
+2. 在左侧展开 `corp.local`。
+3. 新建 OU：
+   - 右键域名 `corp.local` -> “新建” -> “组织单位”
+   - 依次创建：
+     - `Servers`
+     - `Employees`
+     - `ServiceAccounts`
+4. 在 `Employees` OU 中创建普通用户 `zhangsan`：
+   - 右键 `Employees` -> “新建” -> “用户”
+   - 名字：`zhangsan`
+   - 用户登录名：`zhangsan`
+   - 密码：`P@ssw0rd123`
+   - 勾选“密码永不过期”时请谨慎，普通用户一般不要勾选
+5. 按同样方式在 `Employees` OU 中创建 `itadmin`：
+   - 用户登录名：`itadmin`
+   - 密码：`Admin@2024!`
+6. 在 `ServiceAccounts` OU 中创建服务账户 `sqlsvc`：
+   - 用户登录名：`sqlsvc`
+   - 密码：`Service@2024`
+   - 勾选“密码永不过期”，用于演示服务账户风险
+7. 给 `sqlsvc` 添加 SPN：
+   - 在 `sqlsvc` 上右键“属性” -> 如果界面中没有直接显示 SPN，打开“属性编辑器”
+   - 找到 `servicePrincipalName`
+   - 添加：`MSSQLSvc/dc01.corp.local:1433`
+
+如果“属性编辑器”页签没有显示，通常是因为当前控制台启用了简化视图。可右键对象查看完整属性，或改用下面的补充命令单独添加 SPN：
+
+```powershell
+setspn -S MSSQLSvc/dc01.corp.local:1433 CORP\sqlsvc
+```
+
+**GUI 完成后应验证**
+
+- `Employees` OU 下能看到 `zhangsan` 和 `itadmin`
+- `ServiceAccounts` OU 下能看到 `sqlsvc`
+- 打开 `sqlsvc` 属性后，能确认该账户已配置服务标识信息
 
 #### 3.3.3 可选：为教学演示准备“错误授权”场景
 
