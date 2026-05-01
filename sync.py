@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Dict
@@ -204,7 +205,22 @@ def sync(mapping: Dict[str, str], force: bool = False) -> None:
             print(f"  {item}")
         save_mapping(mapping)
 
-    print(f"\nDone: {updated} updated, {skipped} skipped")
+    # Sync non-markdown assets (images, etc.) preserving relative paths
+    ASSET_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+    asset_copied = 0
+    for source_file in VAULT.rglob("*"):
+        if source_file.suffix.lower() not in ASSET_EXTS:
+            continue
+        source_rel = source_file.relative_to(VAULT)
+        target_dir = DOCS / map_directory(source_rel.parent)
+        target_file = target_dir / source_file.name
+        if target_file.exists() and source_file.stat().st_mtime <= target_file.stat().st_mtime:
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, target_file)
+        asset_copied += 1
+
+    print(f"\nDone: {updated} updated, {skipped} skipped, {asset_copied} assets synced")
 
 
 def main() -> None:
