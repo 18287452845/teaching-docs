@@ -9,6 +9,7 @@ title: "05.项目五 MySQL数据库安全基础"
 - 能够在 Ubuntu 24.04 LTS 环境下完成 MySQL 的安装与验证（以 MySQL 8.0 为主）
 - 掌握 MySQL 服务的启动/停止，并完成初始密码修改 / 认证方式理解
 - 能够创建受限账户并配置**内网远程访问**权限（两台 VM 互连）
+- 理解 MySQL 权限体系的层级结构，能按最小权限原则完成账号授权
 - 了解 MySQL 四种主要日志的用途及基本操作，重点掌握 binlog 的开启与基础恢复思路（PITR）
 
 <aside>
@@ -24,12 +25,14 @@ title: "05.项目五 MySQL数据库安全基础"
 **实验拓扑（同一内网两台虚拟机互连）**
 
 - VM-A：MySQL Server（示例 IP：`192.168.100.20`）
+- VM-B：客户端 / 测试机（示例 IP：`192.168.100.21`）
 - 两台 VM 需能互相 ping 通；后续远程连接走 TCP/3306
+
 </aside>
 
 ---
 
-# 第 1 课 安装与验证：让 MySQL “能跑起来”
+# 第 1 课 安装与验证：让 MySQL "能跑起来"
 
 ## 1.1 本课要解决的问题
 
@@ -50,7 +53,30 @@ MySQL 是世界上最流行的**开源关系型数据库管理系统（RDBMS）*
 <aside>
 💬
 
-**一句话理解**：如果把 Web 应用比作餐厅，MySQL 就是后厨的“仓库管理系统”——所有数据的存、取、改、删都由它负责。
+**一句话理解**：如果把 Web 应用比作餐厅，MySQL 就是后厨的"仓库管理系统"——所有数据的存、取、改、删都由它负责。
+
+</aside>
+
+### MySQL 8.0 核心特性速览
+
+| 特性 | 说明 |
+| --- | --- |
+| **默认认证插件** | `caching_sha2_password`（取代旧版 `mysql_native_password`） |
+| **默认字符集** | `utf8mb4`（支持 Emoji 等四字节字符） |
+| **窗口函数** | `ROW_NUMBER()`、`RANK()` 等分析函数 |
+| **CTE（公共表表达式）** | `WITH ... AS` 语法，提升复杂查询可读性 |
+| **角色管理** | `CREATE ROLE` / `GRANT role TO user`，简化批量权限管理 |
+| **数据字典** | 元数据存储在 InnoDB 表中，不再依赖 `.frm` 文件 |
+
+<aside>
+⚠️
+
+**认证插件兼容性提醒**
+
+MySQL 8.0 默认使用 `caching_sha2_password`，部分旧版客户端（如老版本 Navicat、PHP 7.1 以下的 `mysql_connect`）可能连接失败。解决方案：
+
+- 升级客户端到支持新插件的版本（推荐）
+- 对特定账号降级认证插件：`ALTER USER 'app'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '密码';`
 
 </aside>
 
@@ -62,7 +88,7 @@ MySQL 是世界上最流行的**开源关系型数据库管理系统（RDBMS）*
 📸
 
 **为什么先拍快照？** 安装或配置出错时可一键恢复。
-**操作**：VMware 菜单 → 虚拟机 → 快照 → 拍摄快照 → 命名为“安装MySQL前”
+**操作**：VMware 菜单 → 虚拟机 → 快照 → 拍摄快照 → 命名为"安装MySQL前"
 
 </aside>
 
@@ -179,17 +205,28 @@ exit;
 ```
 
 <aside>
+💬
+
+**为什么 `sudo mysql` 不用密码就能登录？**
+
+Ubuntu 的 apt 安装默认将 root 的认证插件设为 `auth_socket`，该插件不检查密码，而是验证"当前 Linux 用户是否为 root"。所以 `sudo mysql` 能直接进入，这是安全设计——只有 root 能登录数据库管理员。
+
+**这不是"没设密码"**，而是用操作系统级别的权限替代了数据库密码认证。
+
+</aside>
+
+<aside>
 ✅
 
 **第 1 课小结**
 
-- 安装的目标不是“看懂所有概念”，而是完成：安装→启动→加固→验证
-- `sudo mysql` 能进是因为 Ubuntu 默认 auth_socket（不是“没设密码”）
+- 安装的目标不是"看懂所有概念"，而是完成：安装→启动→加固→验证
+- `sudo mysql` 能进是因为 Ubuntu 默认 auth_socket（不是"没设密码"）
 </aside>
 
 ---
 
-# 第 2 课 配置文件与安全基线：把“边界”和“默认坑”补齐
+# 第 2 课 配置文件与安全基线：把"边界"和"默认坑"补齐
 
 ## 2.1 与上一课的衔接（过渡）
 
@@ -198,43 +235,65 @@ exit;
 ## 2.2 本课要解决的问题
 
 - 找到 Ubuntu 24.04 的主配置文件位置
-- 完成三件“必改且可验证”的基线配置：**bind-address / utf8mb4 / time_zone**
+- 完成三件"必改且可验证"的基线配置：**bind-address / utf8mb4 / time_zone**
 - 修改后能重启并验证变量生效
 
 ## 2.3 配置文件入口与结构
 
-MySQL 配置文件采用 INI 格式，Ubuntu 24.04 主要编辑：
+MySQL 配置文件采用 INI 格式。Ubuntu 24.04 的配置文件分散在多个路径，按优先级从高到低排列：
+
+| 路径 | 说明 | 建议 |
+| --- | --- | --- |
+| `/etc/mysql/my.cnf` | 全局入口，通常只做 `!includedir` | 不要动 |
+| `/etc/mysql/mysql.conf.d/mysqld.cnf` | **服务端主配置** | **主要编辑这个文件** |
+| `/etc/mysql/conf.d/` | 自定义补充配置（`.cnf` 后缀） | 可新建文件做模块化配置 |
+| `~/.my.cnf` | 用户级客户端配置 | 可选，简化个人操作 |
 
 <aside>
 📍
 
-`/etc/mysql/mysql.conf.d/mysqld.cnf`（服务端 mysqld 配置）
+**记住这个路径**：`/etc/mysql/mysql.conf.d/mysqld.cnf`
+
+后面所有修改配置的操作都在这个文件里进行。
 
 </aside>
 
-配置段示例：
+配置文件中有两种配置段：
 
+```ini
+[mysqld]      # 服务端配置（mysqld 进程读取）
+[client]      # 客户端配置（mysql、mysqldump 等工具读取）
 ```
-[mysqld]
-port = 3306
-bind-address = 127.0.0.1
 
-[client]
-port = 3306
-```
+<aside>
+💬
+
+**分不清 [mysqld] 和 [client]？**
+
+- `[mysqld]` 影响的是"数据库服务进程怎么跑"——端口、绑定地址、日志、字符集等
+- `[client]` 影响的是"连接工具怎么连"——默认字符集、默认端口等
+
+写错段不会报错但不会生效，这是新手最常踩的坑。
+
+</aside>
 
 ## 2.4 三件必改
 
 ### A. 远程访问边界：bind-address
 
-- `127.0.0.1`：只允许本机连接（安全但 VM-B 连不上）
-- **内网互连实验建议**：改为 `0.0.0.0`，但必须配合：内网网段账号 + 防火墙限制
+MySQL 默认只监听 `127.0.0.1`（本机回环），意味着其他机器无法连接。
 
-```
+```ini
 [mysqld]
 bind-address = 0.0.0.0
 port = 3306
 ```
+
+| 值 | 含义 | 安全性 | 适用场景 |
+| --- | --- | --- | --- |
+| `127.0.0.1` | 仅本机可连接 | 最高 | 单机开发、不需要远程访问 |
+| `0.0.0.0` | 监听所有网卡 | 需配合防火墙 | 内网实验、生产环境 |
+| 具体内网 IP | 只监听指定网卡 | 中等 | 多网卡服务器、精细化控制 |
 
 <aside>
 ⚠️
@@ -243,9 +302,9 @@ port = 3306
 
 </aside>
 
-### B. 字符集：utf8mb4（避免乱码/Emoji问题）
+### B. 字符集：utf8mb4（避免乱码 / Emoji 问题）
 
-```
+```ini
 [mysqld]
 character-set-server = utf8mb4
 collation-server = utf8mb4_unicode_ci
@@ -254,26 +313,67 @@ collation-server = utf8mb4_unicode_ci
 default-character-set = utf8mb4
 ```
 
+<aside>
+💬
+
+**MySQL 中的 `utf8` ≠ 真正的 UTF-8**
+
+MySQL 的 `utf8` 只支持最多 3 字节的字符（基本多语言平面 BMP），无法存储 Emoji 等 4 字节字符。`utf8mb4` 才是完整的 UTF-8 实现。
+
+**结论**：永远用 `utf8mb4`，忘记 `utf8` 的存在。
+
+</aside>
+
 ### C. 时区：+08:00（避免时间错 8 小时）
 
-```
+```ini
 [mysqld]
 default-time-zone = '+08:00'
 ```
 
+<aside>
+💬
+
+**为什么时间会错 8 小时？**
+
+MySQL 默认使用 `SYSTEM` 时区（跟随操作系统）。如果 Ubuntu 的时区配置与预期不符，或者应用服务器和数据库服务器时区不一致，就会出现时间偏差。显式指定 `+08:00` 可以避免这类问题。
+
+</aside>
+
 ## 2.5 重启与验证
+
+修改配置后**必须重启服务**才能生效：
 
 ```bash
 sudo systemctl restart mysql
 sudo systemctl status mysql --no-pager
 ```
 
+用 `SHOW VARIABLES` 逐项验证配置是否生效：
+
 ```sql
+-- 验证绑定地址
 SHOW VARIABLES LIKE 'bind_address';
+
+-- 验证字符集
 SHOW VARIABLES LIKE 'character_set_server';
+SHOW VARIABLES LIKE 'collation_server';
+
+-- 验证时区
 SHOW VARIABLES LIKE 'time_zone';
 SELECT NOW();
 ```
+
+<aside>
+🔧
+
+**排错提示**：如果 `SHOW VARIABLES` 的值和你配置的不同，检查：
+
+1. 配置是否写在了正确的 `[mysqld]` 段下（不是 `[client]`）
+2. 修改后是否重启了 MySQL 服务
+3. 是否有多个配置文件覆盖了你的设置（用 `mysqld --verbose --help | grep -A 1 "Default options"` 查看加载顺序）
+
+</aside>
 
 <aside>
 ✅
@@ -282,6 +382,7 @@ SELECT NOW();
 
 - 三件必改：bind-address（边界）、utf8mb4（编码）、time_zone（时间一致）
 - 修改配置后：重启服务 + SHOW VARIABLES 验证生效
+- 配置写错段不会报错但不会生效，这是最常见的坑
 </aside>
 
 ---
@@ -290,16 +391,87 @@ SELECT NOW();
 
 ## 3.1 与上一课的衔接（过渡）
 
-我们已经允许 MySQL 监听内网（bind-address），接下来要让 VM-B **能连接**，同时遵循数据库安全核心：**不用 root，按最小权限创建业务账号**。
+我们已经允许 MySQL 监听内网（bind-address），接下来要让 VM-B **能连接**，同时遵循数据库安全核心原则：**不用 root，按最小权限创建业务账号**。
 
 ## 3.2 本课要解决的问题
 
 - 理解 MySQL 账户识别方式：`'用户名'@'主机'`
+- 理解权限系统的四层结构（全局 → 数据库 → 表 → 列）
 - 创建一个只允许内网网段连接的用户
 - 给用户授予某个数据库范围内的最小权限
 - 从 VM-B 远程登录验证
+- 掌握账号生命周期管理（查看、修改、撤销、删除）
 
-## 3.3 远程连接三要素（排错顺序）
+## 3.3 MySQL 权限体系：四层结构
+
+MySQL 的权限不是"一个用户一个开关"，而是分层逐级检查的：
+
+```
+第一层：连接验证
+  → 用户名 + 主机名 是否存在？密码对不对？
+  → 失败直接拒绝，不进入下一层
+
+第二层：全局权限（mysql.user 表）
+  → GRANT ALL ON *.*
+  → 超级管理员才给，普通业务账号跳过
+
+第三层：数据库级权限（mysql.db 表）
+  → GRANT SELECT ON mydb.*
+  → 大多数业务账号授在这一层
+
+第四层：表级 / 列级权限（mysql.tables_priv / mysql.columns_priv）
+  → GRANT SELECT ON mydb.orders
+  → 更精细的访问控制
+```
+
+权限验证顺序：**列级 → 表级 → 数据库级 → 全局**，只要有一层明确拒绝，操作就会失败。
+
+<aside>
+💬
+
+**类比理解**：
+
+把 MySQL 想象成一栋大楼——
+
+- **全局权限** = 大楼门禁卡（能进大楼不代表能进每间办公室）
+- **数据库级** = 楼层门禁卡（能进某个楼层的所有房间）
+- **表级** = 某间办公室的钥匙
+- **列级** = 办公桌抽屉的钥匙
+
+业务账号通常只需要"某个楼层"的权限就够了，不需要"大楼管理员"的万能卡。
+
+</aside>
+
+### 权限速查表
+
+| 分类 | 权限 | 说明 | 常见场景 |
+| --- | --- | --- | --- |
+| **数据操作** | `SELECT` | 读取数据 | 只读报表账号 |
+| | `INSERT` | 插入数据 | 应用写入 |
+| | `UPDATE` | 修改数据 | 应用更新 |
+| | `DELETE` | 删除数据 | 应用删除 |
+| **结构管理** | `CREATE` | 创建数据库/表 | 开发者 |
+| | `ALTER` | 修改表结构 | 开发者 |
+| | `DROP` | 删除数据库/表 | **生产环境慎给** |
+| | `INDEX` | 创建/删除索引 | 性能优化 |
+| **管理权限** | `GRANT OPTION` | 允许该用户授权给别人 | 仅限管理员 |
+| | `SUPER` | 管理服务器级操作 | 仅限 DBA |
+| | `PROCESS` | 查看所有连接 | 排查问题 |
+| | `FILE` | 读写服务器文件 | **高危，不建议给** |
+
+<aside>
+⚠️
+
+**高危权限黑名单**：以下权限在教学环境可以了解，但**生产环境绝不应该授予业务账号**：
+
+- `SUPER`：可以修改全局变量、杀死任何连接
+- `FILE`：可以读写服务器文件系统
+- `GRANT OPTION`：可以把权限再授予别人，导致权限失控
+- `ALL PRIVILEGES`：包含以上所有危险权限
+
+</aside>
+
+## 3.4 远程连接三要素（排错顺序）
 
 <aside>
 🔧
@@ -308,16 +480,27 @@ SELECT NOW();
 
 1) MySQL 是否监听 0.0.0.0:3306
 
-2) 防火墙是否放通（`sudo ufw status`）
+```bash
+sudo ss -tlnp | grep 3306
+```
 
-3) 账号 host 是否匹配来源 IP（MySQL：`SELECT user, host, plugin FROM mysql.user;`）
+2) 防火墙是否放通
+
+```bash
+sudo ufw status
+```
+
+3) 账号 host 是否匹配来源 IP
+
+```sql
+SELECT user, host, plugin FROM mysql.user;
+```
 
 </aside>
 
-## 3.4 创建数据库与远程账号
+## 3.5 创建数据库与远程账号（完整流程）
 
 > 下面以数据库 `stusta` 为例，账号只允许 `192.168.100.%` 网段连接。
-> 
 
 在 VM-A（服务器）登录 MySQL：
 
@@ -326,20 +509,51 @@ sudo mysql
 ```
 
 ```sql
--- 1) 准备示例库
+-- 1) 准备示例库和示例表
 CREATE DATABASE stusta;
+USE stusta;
+
+CREATE TABLE students (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    score DECIMAL(5,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO students (name, score) VALUES
+    ('张三', 88.5),
+    ('李四', 92.0),
+    ('王五', 76.0);
 
 -- 2) 创建远程账号（网段限制）
 CREATE USER 'app'@'192.168.100.%' IDENTIFIED BY 'App@Pass123!';
 
--- 3) 最小权限授权（只对 stusta.*）
+-- 3) 最小权限授权（只对 stusta.* 的 CRUD）
 GRANT SELECT, INSERT, UPDATE, DELETE ON stusta.* TO 'app'@'192.168.100.%';
 
 -- 4) 验证权限
 SHOW GRANTS FOR 'app'@'192.168.100.%';
 ```
 
-## 3.5 防火墙（内网实验环境建议）
+<aside>
+💬
+
+**`'app'@'192.168.100.%'` 是什么意思？**
+
+MySQL 账号由"用户名 + 来源主机"两部分组成，缺一不可：
+
+| 写法 | 含义 |
+| --- | --- |
+| `'app'@'%'` | 从任何 IP 都能连（**危险，不要这样写**） |
+| `'app'@'192.168.100.%'` | 只允许 192.168.100.x 网段连接 |
+| `'app'@'192.168.100.21'` | 只允许这一个 IP 连接 |
+| `'app'@'localhost'` | 只允许本机连接 |
+
+同一个用户名搭配不同主机，会被视为**不同的账号**。例如 `'app'@'%'` 和 `'app'@'192.168.100.%'` 是两条独立的记录。
+
+</aside>
+
+## 3.6 防火墙（内网实验环境建议）
 
 若启用了 ufw，可在 VM-A 放通 3306（仅内网）：
 
@@ -348,22 +562,139 @@ sudo ufw allow 3306/tcp
 sudo ufw status
 ```
 
-## 3.6 从 VM-B 远程登录验证
+## 3.7 从 VM-B 远程登录验证
 
 在 VM-B：
 
 ```bash
+# 如果 VM-B 还没装 mysql-client
+sudo apt install -y mysql-client
+
+# 远程连接
 mysql -h 192.168.100.20 -u app -p
 ```
 
 登录后验证：
 
 ```sql
+-- 确认当前身份
 SELECT USER(), CURRENT_USER();
+
+-- 确认只能看到授权的数据库
 SHOW DATABASES;
+
+-- 验证 CRUD 操作
 USE stusta;
-SHOW TABLES;
+SELECT * FROM students;
+
+INSERT INTO students (name, score) VALUES ('赵六', 85.0);
+SELECT * FROM students;
+
+-- 验证权限边界（应该报错）
+CREATE DATABASE hackdb;    -- ERROR 1044: 权限不足
+DROP TABLE students;       -- ERROR 1142: 权限不足
 exit;
+```
+
+<aside>
+💬
+
+**`USER()` 和 `CURRENT_USER()` 的区别**
+
+- `USER()` 返回"你用谁的名义连上来的"，例如 `'app'@'192.168.100.21'`
+- `CURRENT_USER()` 返回"MySQL 实际匹配到的账号记录"，例如 `'app'@'192.168.100.%'`
+
+两者的主机部分可能不同：你从 `.21` 连接，但匹配到了 `.%` 网段的规则。
+
+</aside>
+
+## 3.8 账号生命周期管理
+
+账号不是创建完就不管了。安全运维要求对账号进行完整生命周期管理：
+
+### 查看现有账号
+
+```sql
+-- 查看所有账号
+SELECT user, host, plugin, account_locked FROM mysql.user;
+
+-- 只看有密码的账号（排除 auth_socket）
+SELECT user, host, plugin FROM mysql.user WHERE plugin != 'auth_socket';
+```
+
+### 修改密码
+
+```sql
+-- 修改其他用户的密码（推荐方式，MySQL 8.0）
+ALTER USER 'app'@'192.168.100.%' IDENTIFIED BY 'NewPass@456!';
+
+-- 修改自己的密码
+ALTER USER USER() IDENTIFIED BY 'MyNewPass@789!';
+```
+
+### 撤销权限
+
+```sql
+-- 撤销 DELETE 权限（只保留 SELECT, INSERT, UPDATE）
+REVOKE DELETE ON stusta.* FROM 'app'@'192.168.100.%';
+
+-- 验证
+SHOW GRANTS FOR 'app'@'192.168.100.%';
+```
+
+### 锁定与解锁账号
+
+```sql
+-- 临时锁定账号（禁止登录，但不删除）
+ALTER USER 'app'@'192.168.100.%' ACCOUNT LOCK;
+
+-- 解锁
+ALTER USER 'app'@'192.168.100.%' ACCOUNT UNLOCK;
+```
+
+### 删除账号
+
+```sql
+-- 删除账号（不可逆，先确认没有业务在使用）
+DROP USER 'app'@'192.168.100.%';
+```
+
+<aside>
+⚠️
+
+**删除前先查依赖**：在删除账号前，检查是否有视图、存储过程或定时任务引用了该账号，避免删除后导致业务报错。
+
+</aside>
+
+## 3.9 密码策略与安全加固
+
+MySQL 8.0 内置了密码验证组件 `validate_password`，可以强制密码复杂度：
+
+```sql
+-- 查看密码策略（需要先安装组件）
+INSTALL COMPONENT 'file://component_validate_password';
+
+-- 查看当前策略
+SHOW VARIABLES LIKE 'validate_password%';
+```
+
+| 参数 | 含义 | 默认值 | 建议值 |
+| --- | --- | --- | --- |
+| `validate_password.length` | 密码最短长度 | 8 | 8+ |
+| `validate_password.mixed_case_count` | 大小写字母最少各几个 | 1 | 1 |
+| `validate_password.number_count` | 数字最少几个 | 1 | 1 |
+| `validate_password.special_char_count` | 特殊字符最少几个 | 1 | 1 |
+| `validate_password.policy` | 策略等级 | MEDIUM | MEDIUM |
+
+策略等级说明：
+- `LOW`：只检查长度
+- `MEDIUM`：长度 + 大小写 + 数字 + 特殊字符
+- `STRONG`：MEDIUM + 字典检查
+
+```sql
+-- 修改密码策略（按需调整）
+SET GLOBAL validate_password.policy = MEDIUM;
+SET GLOBAL validate_password.length = 10;
 ```
 
 <aside>
@@ -371,62 +702,199 @@ exit;
 
 **第 3 课小结**
 
-- 账户身份 = `'user'@'host'`，host 约束“从哪里来”
+- 账户身份 = `'user'@'host'`，host 约束"从哪里来"
+- 权限分四层：全局 → 数据库 → 表 → 列，授权尽量精确到数据库级
 - 远程访问建议：网段限制 + 最小权限授权 + 不使用 root
+- 账号有完整生命周期：创建 → 授权 → 修改 → 锁定 → 删除
+- 生产环境启用 `validate_password` 组件强制密码复杂度
 </aside>
 
 ---
 
 # 第 4 课 日志：会排错、会定位慢、会恢复（重点：binlog）
 
-## 4.1
+## 4.1 与上一课的衔接（过渡）
 
-我们已经实现“远程可用 + 最小权限”。最后要补上安全运维闭环：**出了问题能查、误操作能追溯、必要时能恢复**——这就靠日志。
+我们已经实现"远程可用 + 最小权限"。最后要补上安全运维闭环：**出了问题能查、误操作能追溯、必要时能恢复**——这就靠日志。
 
 ## 4.2 本课要解决的问题
 
 - 知道四类日志分别在什么场景用
 - 能查看错误日志、能开启/查看慢查询日志
-- 能开启 binlog，并理解“全量备份 + binlog 回放”的时间点恢复（PITR）思路
+- 能开启 binlog，并理解"全量备份 + binlog 回放"的时间点恢复（PITR）思路
 
 ## 4.3 四种主要日志（先会选，再会做）
 
-| 日志类型 | 记录内容 | 主要用途 | 建议 |
-| --- | --- | --- | --- |
-| 错误日志（Error Log） | 启动/关闭/运行错误 | 故障排查第一入口 | 默认开启，必须会看 |
-| 查询日志（General Log） | 所有 SQL | 审计/调试 | 仅排错时临时开 |
-| 二进制日志（binlog） | 所有写操作事件 | 复制 + PITR 恢复 | 建议开启（重点） |
-| 慢查询日志（Slow Log） | 超过阈值的 SQL | 性能定位 | 建议开启（会用即可） |
+| 日志类型 | 记录内容 | 主要用途 | 性能影响 | 建议 |
+| --- | --- | --- | --- | --- |
+| **错误日志**（Error Log） | 启动/关闭/运行错误 | 故障排查第一入口 | 无 | 默认开启，必须会看 |
+| **通用查询日志**（General Log） | 所有 SQL 语句 | 审计/调试 | 高 | 仅排错时临时开启 |
+| **二进制日志**（binlog） | 所有写操作事件 | 复制 + PITR 恢复 | 低-中 | 建议开启（重点） |
+| **慢查询日志**（Slow Log） | 超过阈值的 SQL | 性能定位 | 低 | 建议开启（会用即可） |
+
+<aside>
+💬
+
+**为什么日志很重要却不能全开？**
+
+通用查询日志会记录每一条 SQL（包括 SELECT），在高并发场景下会产生大量 I/O，严重影响性能。所以它只用于临时排错，排完立即关闭。而 binlog 只记录写操作（INSERT/UPDATE/DELETE/DDL），体积小得多，适合长期开启。
+
+</aside>
 
 ## 4.4 错误日志：服务异常先看这里
 
+错误日志是排查 MySQL 故障的**第一入口**。MySQL 启动失败、崩溃、权限错误等都会记录在这里。
+
 ```bash
+# 查看最近 100 行错误日志
 tail -100 /var/log/mysql/error.log
+
+# 实时跟踪（排查启动问题时特别有用）
+sudo tail -f /var/log/mysql/error.log
 ```
+
+```sql
+-- 在 MySQL 内查看错误日志路径
+SHOW VARIABLES LIKE 'log_error';
+```
+
+### 常见错误日志场景
+
+| 日志关键字 | 含义 | 排查方向 |
+| --- | --- | --- |
+| `[ERROR] Can't start server` | 服务启动失败 | 检查端口冲突、配置文件语法、磁盘空间 |
+| `[ERROR] Access denied` | 认证失败 | 检查用户名/密码/主机权限 |
+| `[ERROR] Disk full` | 磁盘满 | 清理日志、扩展磁盘 |
+| `[Warning] IP address 'x.x.x.x' could not be resolved` | DNS 反解失败 | 设置 `skip_name_resolve` |
+
+<aside>
+🔧
+
+**快速排错步骤**：
+
+1. 先看 `tail -50 /var/log/mysql/error.log`
+2. 找到最近的 `[ERROR]` 行
+3. 复制错误信息搜索解决方案
+4. 如果服务完全启动不了：`sudo systemctl status mysql` 查看 systemd 层面的报错
+
+</aside>
 
 ## 4.5 慢查询日志：系统慢了怎么找 SQL
 
+慢查询日志记录执行时间超过阈值的 SQL 语句，是定位"系统为什么慢"的关键工具。
+
+### 开启与配置
+
 ```sql
+-- 查看当前状态
 SHOW VARIABLES LIKE 'slow_query%';
 SHOW VARIABLES LIKE 'long_query_time';
 
+-- 开启慢查询日志（临时生效，重启后失效）
 SET GLOBAL slow_query_log = 1;
-SET GLOBAL long_query_time = 1;
+SET GLOBAL long_query_time = 1;   -- 超过 1 秒的 SQL 记录到慢查询日志
+SET GLOBAL log_queries_not_using_indexes = 1;  -- 没用索引的也记录
+```
 
+```sql
+-- 在配置文件中永久生效
+-- 编辑 /etc/mysql/mysql.conf.d/mysqld.cnf
+-- [mysqld] 段添加：
+-- slow_query_log = 1
+-- slow_query_log_file = /var/log/mysql/slow.log
+-- long_query_time = 1
+-- log_queries_not_using_indexes = 1
+```
+
+### 查看慢查询日志
+
+```bash
+# 查看慢查询日志
+tail -50 /var/log/mysql/slow.log
+
+# 统计慢查询数量
 SHOW GLOBAL STATUS LIKE 'Slow_queries';
 ```
 
+### 用 mysqldumpslow 分析
+
+MySQL 自带了慢查询日志分析工具：
+
 ```bash
-tail -50 /var/log/mysql/slow.log
+# 按执行次数排序，显示前 10 条
+sudo mysqldumpslow -s c -t 10 /var/log/mysql/slow.log
+
+# 按平均执行时间排序
+sudo mysqldumpslow -s at -t 10 /var/log/mysql/slow.log
+
+# 按锁定时间排序
+sudo mysqldumpslow -s t -t 10 /var/log/mysql/slow.log
 ```
+
+| 参数 | 含义 |
+| --- | --- |
+| `-s c` | 按查询次数（count）排序 |
+| `-s at` | 按平均查询时间（avg time）排序 |
+| `-s t` | 按总锁定时间排序 |
+| `-t N` | 只显示前 N 条 |
+
+<aside>
+💬
+
+**慢查询日志的实战价值**
+
+假设用户反馈"系统很卡"，排查思路：
+
+1. 查看 `Slow_queries` 数值是否异常增长
+2. 用 `mysqldumpslow` 找出最慢的几条 SQL
+3. 用 `EXPLAIN` 分析这些 SQL 的执行计划
+4. 优化索引或改写 SQL
+
+这个流程是 DBA 日常工作的一部分。
+
+</aside>
 
 ---
 
-## 4.6 Binlog（重点）：开启 + 验证 + PITR 思路
+## 4.6 通用查询日志：临时排错利器
 
-### 4.6.1 开启 binlog（VM-A 修改配置文件）
+通用查询日志记录**每一条**到达 MySQL 的 SQL，包括连接、断开、查询。由于日志量巨大，**只在排错时临时开启**。
 
-编辑：
+```sql
+-- 查看当前状态
+SHOW VARIABLES LIKE 'general_log%';
+
+-- 临时开启（排错时使用）
+SET GLOBAL general_log = 1;
+SET GLOBAL general_log_file = '/var/log/mysql/general.log';
+
+-- ... 执行需要排查的操作 ...
+
+-- 排查完毕，立即关闭
+SET GLOBAL general_log = 0;
+```
+
+<aside>
+⚠️
+
+**通用查询日志是性能杀手**
+
+在生产环境长期开启通用查询日志，每秒可能产生数 MB 日志，迅速填满磁盘。只用于临时排错，用完即关。
+
+</aside>
+
+---
+
+## 4.7 Binlog（重点）：开启 + 验证 + PITR 思路
+
+binlog 是 MySQL 最重要的日志之一。它记录了所有**修改数据**的操作（INSERT / UPDATE / DELETE / DDL），用途有两个：
+
+1. **主从复制**：从服务器通过读取主服务器的 binlog 来同步数据（下一章会用到）
+2. **数据恢复**：配合全量备份实现时间点恢复（PITR）
+
+### 4.7.1 开启 binlog
+
+编辑配置文件：
 
 ```bash
 sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
@@ -434,12 +902,37 @@ sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
 
 在 `[mysqld]` 段添加（或确认存在）：
 
-```
+```ini
 [mysqld]
 log_bin = /var/lib/mysql/mysql-bin
 binlog_format = ROW
 server_id = 1
+expire_logs_days = 7
+max_binlog_size = 100M
 ```
+
+| 参数 | 含义 | 建议值 |
+| --- | --- | --- |
+| `log_bin` | binlog 文件路径前缀 | 保持默认即可 |
+| `binlog_format` | 记录格式 | `ROW`（推荐，最安全） |
+| `server_id` | 服务器唯一标识 | 单机可随意，主从必须不同 |
+| `expire_logs_days` | 自动清理天数 | 7-30，根据磁盘空间调整 |
+| `max_binlog_size` | 单个 binlog 文件最大体积 | 100M-256M |
+
+<aside>
+💬
+
+**binlog_format 三种格式的区别**
+
+| 格式 | 记录内容 | 优点 | 缺点 |
+| --- | --- | --- | --- |
+| `STATEMENT` | 原始 SQL 语句 | 日志体积小 | 某些函数（如 NOW()）在从库执行结果不同 |
+| `ROW` | 每行数据变更前后的值 | 最精确、最安全 | 日志体积较大 |
+| `MIXED` | 自动选择 | 折中 | 行为不可预测 |
+
+**结论**：生产环境统一用 `ROW`，不需要纠结。
+
+</aside>
 
 重启并验证：
 
@@ -448,19 +941,36 @@ sudo systemctl restart mysql
 ```
 
 ```sql
-SHOW VARIABLES LIKE 'log_bin';
-SHOW VARIABLES LIKE 'binlog_format';
+-- 验证 binlog 是否开启
+SHOW VARIABLES LIKE 'log_bin';             -- 应该是 ON
+
+-- 查看 binlog 格式
+SHOW VARIABLES LIKE 'binlog_format';       -- 应该是 ROW
+
+-- 查看所有 binlog 文件
 SHOW BINARY LOGS;
+
+-- 查看当前正在写入的 binlog 文件及位置
 SHOW MASTER STATUS;
 ```
 
-### 4.6.2 解析与按时间筛选（了解 + 会用命令）
+### 4.7.2 查看 binlog 内容
+
+binlog 是二进制格式，不能直接用 `cat` 查看，需要使用 `mysqlbinlog` 工具：
 
 ```bash
+# 解码查看第一个 binlog 文件的内容
 sudo mysqlbinlog --base64-output=DECODE-ROWS -v /var/lib/mysql/mysql-bin.000001 | less
 ```
 
-按时间范围：
+参数说明：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--base64-output=DECODE-ROWS` | 将 base64 编码解码为可读格式 |
+| `-v`（或 `--verbose`） | 显示行变更的详细信息（ROW 格式必需） |
+
+按时间范围筛选：
 
 ```bash
 sudo mysqlbinlog \
@@ -469,42 +979,103 @@ sudo mysqlbinlog \
   /var/lib/mysql/mysql-bin.000001 | less
 ```
 
-### 4.6.3 时间点恢复（PITR）三步走
+按位置范围筛选（更精确）：
+
+```bash
+sudo mysqlbinlog \
+  --start-position=154 \
+  --stop-position=1024 \
+  /var/lib/mysql/mysql-bin.000001 | less
+```
+
+<aside>
+💬
+
+**按时间 vs 按位置**
+
+- 按时间筛选（`--start-datetime`）：方便但不够精确，同一秒内可能有多条操作
+- 按位置筛选（`--start-position`）：精确到每一行，PITR 恢复时推荐用这种方式
+
+**查看 MASTER STATUS** 可以获取当前 binlog 的文件名和位置，记录这个信息可以在恢复时精确定位。
+
+</aside>
+
+### 4.7.3 时间点恢复（PITR）实战演示
 
 <aside>
 🛡️
 
-**PITR（Point-In-Time Recovery）核心流程**：
+**PITR（Point-In-Time Recovery）是什么？**
 
-1) 先恢复全量备份（如 mysqldump）
+场景：今天上午 10:00 有人误执行了 `DELETE FROM students;`，清空了整张表。你有一个昨晚的全量备份，但恢复备份只能回到昨晚的状态，今天上午的所有正常数据都会丢失。
 
-2) 确定误操作时间点（从 binlog 找到）
-
-3) 回放 binlog 到误操作前一刻（`--stop-datetime`）
+PITR 的思路：先恢复昨晚的备份 → 再用 binlog "重放"今天 00:00 到 09:59 之间的所有正常操作 → 数据恢复到误操作前一刻。
 
 </aside>
 
-示例（思路演示）：
+**PITR 三步走**：
 
 ```bash
-# 1) 恢复全量备份
-mysql -u root -p < full_backup.sql
+# 第 1 步：恢复全量备份（假设昨晚的 mysqldump 备份）
+mysql -u root -p stusta < full_backup_20260420.sql
 
-# 2) 回放 binlog 到误操作前
+# 第 2 步：从 binlog 中找到误操作的时间点
+# 查看 binlog，定位 DELETE 语句的位置
+sudo mysqlbinlog --base64-output=DECODE-ROWS -v /var/lib/mysql/mysql-bin.000002 | grep -B5 "DELETE FROM students"
+
+# 第 3 步：回放 binlog 到误操作前一刻
 sudo mysqlbinlog \
   --stop-datetime="2026-04-21 09:59:59" \
+  --database=stusta \
   /var/lib/mysql/mysql-bin.000001 \
   /var/lib/mysql/mysql-bin.000002 | mysql -u root -p
 ```
+
+<aside>
+💬
+
+**PITR 操作顺序很重要**
+
+必须先恢复全量备份，再回放 binlog。如果顺序反了（先回放 binlog 再恢复全量备份），全量备份会覆盖掉 binlog 回放的数据，等于白干。
+
+**记忆口诀**：先备后 bin，顺序不能反。
+
+</aside>
+
+### 4.7.4 binlog 管理
+
+```sql
+-- 手动切换到新的 binlog 文件（当前文件写满或手动切换）
+FLUSH BINARY LOGS;
+
+-- 手动清理 7 天前的 binlog
+PURGE BINARY LOGS BEFORE DATE_SUB(NOW(), INTERVAL 7 DAY);
+
+-- 清理指定文件之前的所有 binlog
+PURGE BINARY LOGS TO 'mysql-bin.000005';
+```
+
+<aside>
+⚠️
+
+**binlog 不清理会怎样？**
+
+binlog 文件会持续增长，直到填满磁盘。MySQL 不会自动清理 binlog（除非设置了 `expire_logs_days`）。在磁盘空间不足时，MySQL 会**停止写入**，等于服务瘫痪。
+
+**建议**：设置 `expire_logs_days = 7`（或根据备份策略调整），定期自动清理。
+
+</aside>
 
 <aside>
 ✅
 
 **第 4 课小结**
 
-- 错误日志：服务异常第一入口
-- 慢查询：会开、会看、会定位慢 SQL
-- binlog：能开启、能验证、能讲清 PITR 三步走
+- **错误日志**：服务异常第一入口，`tail -f /var/log/mysql/error.log`
+- **慢查询日志**：会开、会看、会用 `mysqldumpslow` 定位慢 SQL
+- **通用查询日志**：临时排错利器，用完即关
+- **binlog**：能开启、能验证、能解释 PITR 三步走
+- **binlog 管理**：设置自动清理，避免磁盘撑满
 </aside>
 
 ---
@@ -514,9 +1085,9 @@ sudo mysqlbinlog \
 | 课时 | 核心能力 | 验收点（可检查） |
 | --- | --- | --- |
 | 第 1 课：安装验证 | 装得起来 | 服务 active + `SELECT VERSION()` |
-| 第 2 课：配置基线 | 配得安全 | bind-address/utf8mb4/time_zone 生效 |
-| 第 3 课：账号权限 | 管得住人 | VM-B 能用最小权限账号远程登录 |
-| 第 4 课：日志与恢复 | 能追溯/能恢复 | 能查看错误/慢查询；binlog 开启并能解释 PITR |
+| 第 2 课：配置基线 | 配得安全 | bind-address / utf8mb4 / time_zone 生效 |
+| 第 3 课：账号权限 | 管得住人 | VM-B 能用最小权限账号远程登录，且无权执行越权操作 |
+| 第 4 课：日志与恢复 | 能追溯/能恢复 | 能查看错误/慢查询；binlog 开启并能解释 PITR 三步走 |
 
 ---
 
@@ -564,11 +1135,3 @@ sudo mysqlbinlog \
     - MySQL 8.0 推荐：`ALTER USER ... IDENTIFIED BY ...;`
     - `SET PASSWORD ... = PASSWORD()` 为旧语法（8.0 已弃用 PASSWORD()）
     - `mysqladmin` 适用于脚本化，但注意密码泄露风险（命令历史/进程列表）
-- 附录 E：Navicat 远程连接与 8.0 认证插件兼容性
-    
-    MySQL 8.0 默认使用 `caching_sha2_password`，旧版 Navicat 可能不支持。可升级客户端，或对该账号临时降级：
-    
-    ```sql
-    ALTER USER 'app'@'192.168.100.%'
-      IDENTIFIED WITH mysql_native_password BY 'App@Pass123!';
-    ```
