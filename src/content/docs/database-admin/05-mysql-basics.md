@@ -22,17 +22,17 @@ title: "05.项目五 MySQL数据库安全基础"
 <aside>
 🖥️
 
-**实验拓扑（同一内网两台虚拟机互连）**
+**实验拓扑（虚拟机 + 宿主机 Navicat）**
 
-- VM-A：MySQL Server（示例 IP：`192.168.100.20`）
-- VM-B：客户端 / 测试机（示例 IP：`192.168.100.21`）
-- 两台 VM 需能互相 ping 通；后续远程连接走 TCP/3306
+- 虚拟机（VM）：运行 MySQL Server（示例 IP：`192.168.100.20`）
+- 宿主机（Windows）：使用 Navicat 远程连接虚拟机中的 MySQL
+- 宿主机与虚拟机需能互相 ping 通；远程连接走 TCP/3306
 
 **课堂产出**
 
-- VM-A 能通过 `sudo mysql` 登录并查看版本
+- 虚拟机能通过 `sudo mysql` 登录并查看版本
 - MySQL 基线配置生效：监听地址、字符集、时区均可验证
-- VM-B 能使用 `app@192.168.100.%` 远程登录，但不能越权建库或删表
+- 宿主机 Navicat 能使用 `app@192.168.100.%` 远程登录，但不能越权建库或删表
 - 能说清四类日志的用途，并完成 binlog 开启验证
 
 </aside>
@@ -422,7 +422,7 @@ SELECT NOW();
 
 ## 3.1 与上一课的衔接（过渡）
 
-我们已经允许 MySQL 监听内网（bind-address），接下来要让 VM-B **能连接**，同时遵循数据库安全核心原则：**不用 root，按最小权限创建业务账号**。
+我们已经允许 MySQL 监听内网（bind-address），接下来要让宿主机的 Navicat **能连接**，同时遵循数据库安全核心原则：**不用 root，按最小权限创建业务账号**。
 
 ## 3.2 本课要解决的问题
 
@@ -430,10 +430,46 @@ SELECT NOW();
 - 理解权限系统的四层结构（全局 → 数据库 → 表 → 列）
 - 创建一个只允许内网网段连接的用户
 - 给用户授予某个数据库范围内的最小权限
-- 从 VM-B 远程登录验证
+- 从宿主机 Navicat 远程登录验证
+- 掌握权限变更的生效机制，知道什么时候需要 `FLUSH PRIVILEGES`
 - 掌握账号生命周期管理（查看、修改、撤销、删除）
 
-## 3.3 MySQL 权限体系：四层结构
+<aside>
+🧭
+
+**本课学习顺序**：先识别账号是谁、从哪里来 → 再决定能做什么 → 然后创建账号并授权 → 用 Navicat 验证边界 → 维护账号、理解权限何时生效。
+
+</aside>
+
+## 3.3 账号身份：先看 `'user'@'host'`
+
+在 MySQL 中，账号不是单独的用户名，而是 **用户名 + 来源主机** 的组合：
+
+```sql
+'user'@'host'
+```
+
+例如：
+
+| 写法 | 含义 | 安全建议 |
+| --- | --- | --- |
+| `'app'@'localhost'` | 只允许本机连接 | 适合本机脚本或维护任务 |
+| `'app'@'192.168.100.1'` | 只允许宿主机这一台机器连接 | 最精确，推荐用于固定客户端 |
+| `'app'@'192.168.100.%'` | 允许 192.168.100.x 网段连接 | 适合课堂内网实验 |
+| `'app'@'%'` | 允许任何来源连接 | 风险高，生产环境避免使用 |
+
+同一个用户名搭配不同主机，会被视为**不同的账号**。例如 `'app'@'%'` 和 `'app'@'192.168.100.%'` 是两条独立账号记录，密码和权限也可以不同。
+
+<aside>
+💬
+
+**为什么远程账号经常连不上？**
+
+很多同学只记住用户名和密码，却忘了 MySQL 还要匹配来源主机。比如你从宿主机 `192.168.100.1` 登录时，如果只创建了 `'app'@'localhost'`，MySQL 会拒绝连接，因为来源主机不匹配。
+
+</aside>
+
+## 3.4 MySQL 权限体系：再看“能做什么”
 
 MySQL 的权限不是"一个用户一个开关"，而是分层逐级检查的：
 
@@ -509,12 +545,12 @@ MySQL 的权限不是"一个用户一个开关"，而是分层逐级检查的：
 
 </aside>
 
-## 3.4 远程连接三要素（排错顺序）
+## 3.5 远程连接三要素（排错顺序）
 
 <aside>
 🔧
 
-**从 VM-B 连不上？按这个顺序查：**
+**从宿主机 Navicat 连不上？按这个顺序查：**
 
 1) MySQL 是否监听 0.0.0.0:3306
 
@@ -536,11 +572,11 @@ SELECT user, host, plugin FROM mysql.user;
 
 </aside>
 
-## 3.5 创建数据库与远程账号（完整流程）
+## 3.6 创建数据库与远程账号（完整流程）
 
-> 下面以数据库 `stusta` 为例，账号只允许 `192.168.100.%` 网段连接。
+> 下面以数据库 `stusta` 为例，账号只允许 `192.168.100.%` 网段连接（覆盖宿主机所在网段）。
 
-在 VM-A（服务器）登录 MySQL：
+在虚拟机中登录 MySQL：
 
 ```bash
 sudo mysql
@@ -574,30 +610,21 @@ SHOW GRANTS FOR 'app'@'192.168.100.%';
 ```
 
 <aside>
-💬
+✅
 
-**`'app'@'192.168.100.%'` 是什么意思？**
+**这里先用标准授权语句，不直接改系统表**
 
-MySQL 账号由"用户名 + 来源主机"两部分组成，缺一不可：
-
-| 写法 | 含义 |
-| --- | --- |
-| `'app'@'%'` | 从任何 IP 都能连（**危险，不要这样写**） |
-| `'app'@'192.168.100.%'` | 只允许 192.168.100.x 网段连接 |
-| `'app'@'192.168.100.21'` | 只允许这一个 IP 连接 |
-| `'app'@'localhost'` | 只允许本机连接 |
-
-同一个用户名搭配不同主机，会被视为**不同的账号**。例如 `'app'@'%'` 和 `'app'@'192.168.100.%'` 是两条独立的记录。
+上面的 `CREATE USER` 和 `GRANT` 属于 MySQL 推荐的账号权限管理语句，执行后权限会自动生效。后面会单独说明：什么时候需要 `FLUSH PRIVILEGES`，什么时候不需要。
 
 </aside>
 
-## 3.6 防火墙（内网实验环境建议）
+## 3.7 防火墙（内网实验环境建议）
 
-若启用了 ufw，建议只允许 VM-B 或内网网段访问 3306，而不是向所有来源开放：
+若启用了 ufw，建议只允许宿主机或内网网段访问 3306，而不是向所有来源开放：
 
 ```bash
-# 只允许 VM-B 访问 MySQL（更推荐）
-sudo ufw allow from 192.168.100.21 to any port 3306 proto tcp
+# 只允许宿主机访问 MySQL（更推荐，把 IP 替换为你宿主机的实际 IP）
+sudo ufw allow from 192.168.100.1 to any port 3306 proto tcp
 
 # 或允许整个实验网段访问
 sudo ufw allow from 192.168.100.0/24 to any port 3306 proto tcp
@@ -605,38 +632,90 @@ sudo ufw allow from 192.168.100.0/24 to any port 3306 proto tcp
 sudo ufw status
 ```
 
-## 3.7 从 VM-B 远程登录验证
+<aside>
+💡
 
-在 VM-B：
+**如何确认宿主机 IP？**
 
-```bash
-# 如果 VM-B 还没装 mysql-client
-sudo apt install -y mysql-client
+在宿主机（Windows）上打开 CMD 或 PowerShell，执行：
 
-# 远程连接
-mysql -h 192.168.100.20 -u app -p
+```powershell
+ipconfig
 ```
 
-登录后验证：
+找到与虚拟机同一网段的网卡 IP（通常是 VMware Network Adapter VMnet1 或 VMnet8 对应的 IP）。在虚拟机中也可以用 `ping` 测试连通性。
+
+</aside>
+
+## 3.8 从宿主机 Navicat 远程登录验证
+
+### 3.8.1 Navicat 连接配置
+
+在宿主机打开 Navicat，新建 MySQL 连接，填写以下信息：
+
+| 配置项 | 填写内容 | 说明 |
+| --- | --- | --- |
+| 连接名 | `MySQL-Lab`（自定义） | 仅用于区分连接 |
+| 主机 | `192.168.100.20` | 虚拟机的实际 IP |
+| 端口 | `3306` | MySQL 默认端口 |
+| 用户名 | `app` | 刚才创建的最小权限账号 |
+| 密码 | `App@Pass123!` | 创建时设定的密码 |
+
+点击"测试连接"，成功后保存并双击打开连接。
+
+<aside>
+⚠️
+
+**Navicat 连接失败的常见原因**
+
+1. **认证插件不兼容**：如果 Navicat 版本较旧（如 Navicat 12 及以下），可能不支持 `caching_sha2_password`，报错 `2059 - Authentication plugin 'caching_sha2_password' cannot be loaded`。解决方法：
+
+```sql
+-- 在虚拟机 MySQL 中降级该账号的认证插件
+ALTER USER 'app'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY 'App@Pass123!';
+```
+
+推荐方案是升级 Navicat 到 16+ 版本（原生支持新插件）。
+
+2. **宿主机与虚拟机网络不通**：在宿主机 CMD 中 `ping 192.168.100.20`，确认能通。
+3. **防火墙未放通**：回到虚拟机检查 `sudo ufw status`。
+
+</aside>
+
+### 3.8.2 在 Navicat 中验证权限
+
+连接成功后，在 Navicat 中执行以下验证：
+
+**① 确认能看到授权的数据库**
+
+在左侧数据库列表中，应该能看到 `stusta`，但**不应该**看到 `mysql`、`information_schema` 等系统库。
+
+**② 验证查询操作（应成功）**
+
+双击 `stusta` 数据库 → 双击 `students` 表 → 可以查看数据。
+
+也可以在 Navicat 的查询窗口中执行 SQL：
 
 ```sql
 -- 确认当前身份
 SELECT USER(), CURRENT_USER();
 
--- 确认只能看到授权的数据库
-SHOW DATABASES;
+-- 验证查询
+SELECT * FROM stusta.students;
 
--- 验证 CRUD 操作
-USE stusta;
-SELECT * FROM students;
+-- 验证写入
+INSERT INTO stusta.students (name, score) VALUES ('赵六', 85.0);
+```
 
-INSERT INTO students (name, score) VALUES ('赵六', 85.0);
-SELECT * FROM students;
+**③ 验证权限边界（应该报错）**
 
--- 验证权限边界（应该报错）
-CREATE DATABASE hackdb;    -- ERROR 1044: 权限不足
-DROP TABLE students;       -- ERROR 1142: 权限不足
-exit;
+在 Navicat 查询窗口中尝试越权操作：
+
+```sql
+-- 以下操作都应该失败
+CREATE DATABASE hackdb;         -- ERROR 1044: 权限不足
+DROP TABLE stusta.students;     -- ERROR 1142: 权限不足
+SELECT * FROM mysql.user;       -- ERROR 1142: 权限不足
 ```
 
 <aside>
@@ -644,14 +723,94 @@ exit;
 
 **`USER()` 和 `CURRENT_USER()` 的区别**
 
-- `USER()` 返回"你用谁的名义连上来的"，例如 `'app'@'192.168.100.21'`
+- `USER()` 返回"你用谁的名义连上来的"，例如 `'app'@'192.168.100.1'`（宿主机 IP）
 - `CURRENT_USER()` 返回"MySQL 实际匹配到的账号记录"，例如 `'app'@'192.168.100.%'`
 
-两者的主机部分可能不同：你从 `.21` 连接，但匹配到了 `.%` 网段的规则。
+两者的主机部分可能不同：你从宿主机 `.1` 连接，但匹配到了 `.%` 网段的规则。
 
 </aside>
 
-## 3.8 账号生命周期管理
+<aside>
+💡
+
+**命令行也能连**
+
+如果想在虚拟机内部用命令行模拟远程登录（或宿主机安装了 MySQL 客户端），同样可以使用：
+
+```bash
+mysql -h 192.168.100.20 -u app -p
+```
+
+Navicat 只是图形化界面，底层走的仍然是同一个 MySQL 协议。
+
+</aside>
+
+## 3.9 权限变更何时生效：`FLUSH PRIVILEGES` 要不要执行？
+
+很多同学在修改账号权限后会习惯性执行：
+
+```sql
+FLUSH PRIVILEGES;
+```
+
+这条语句的作用是：**让 MySQL 重新加载权限表，把磁盘中的授权表重新读入内存**。但并不是所有权限修改都需要它。
+
+### 3.9.1 不需要 `FLUSH PRIVILEGES` 的情况（推荐做法）
+
+只要使用 MySQL 官方账号权限语句，权限会自动刷新并立即生效：
+
+```sql
+CREATE USER 'app'@'192.168.100.%' IDENTIFIED BY 'App@Pass123!';
+GRANT SELECT ON stusta.* TO 'app'@'192.168.100.%';
+REVOKE SELECT ON stusta.* FROM 'app'@'192.168.100.%';
+ALTER USER 'app'@'192.168.100.%' IDENTIFIED BY 'NewPass@456!';
+DROP USER 'app'@'192.168.100.%';
+```
+
+这些语句执行后，MySQL 会自动更新内存中的权限缓存，所以**不用再手动刷新**。
+
+### 3.9.2 需要 `FLUSH PRIVILEGES` 的情况（不推荐新手这样做）
+
+如果直接修改了系统权限表，例如：
+
+```sql
+UPDATE mysql.user SET Host = '192.168.100.%' WHERE User = 'app';
+DELETE FROM mysql.user WHERE User = 'olduser';
+INSERT INTO mysql.user (...);
+```
+
+这类操作绕过了 `CREATE USER` / `GRANT` / `ALTER USER` 等标准语句。MySQL 可能还在使用旧的内存权限缓存，此时才需要：
+
+```sql
+FLUSH PRIVILEGES;
+```
+
+<aside>
+⚠️
+
+**课堂建议**：不要直接 `UPDATE mysql.user`。账号和权限管理优先使用 `CREATE USER`、`ALTER USER`、`GRANT`、`REVOKE`、`DROP USER`。这样语义清晰、风险更低，也通常不需要手动 `FLUSH PRIVILEGES`。
+
+</aside>
+
+### 3.9.3 一张表记住
+
+| 操作方式 | 是否需要 `FLUSH PRIVILEGES` | 原因 |
+| --- | --- | --- |
+| `CREATE USER` / `ALTER USER` / `DROP USER` | 不需要 | MySQL 自动刷新权限缓存 |
+| `GRANT` / `REVOKE` | 不需要 | MySQL 自动刷新权限缓存 |
+| `UPDATE mysql.user` / `DELETE FROM mysql.user` | 需要 | 直接改系统表，需手动让 MySQL 重新加载 |
+| `mysql_secure_installation` 最后选择刷新权限表 | 通常选择 Yes | 向导可能修改系统权限表，刷新可确保生效 |
+
+<aside>
+💬
+
+**记忆口诀**：
+
+用标准语句，不用 flush；直接改表，必须 flush。
+
+</aside>
+
+## 3.10 账号生命周期管理
 
 账号不是创建完就不管了。安全运维要求对账号进行完整生命周期管理：
 
@@ -710,7 +869,7 @@ DROP USER 'app'@'192.168.100.%';
 
 </aside>
 
-## 3.9 密码策略与安全加固
+## 3.11 密码策略与安全加固
 
 MySQL 8.0 内置了密码验证组件 `validate_password`，可以强制密码复杂度：
 
@@ -746,10 +905,11 @@ SET GLOBAL validate_password.length = 10;
 
 **第 3 课小结**
 
-- 账户身份 = `'user'@'host'`，host 约束"从哪里来"
+- 账户身份 = `'user'@'host'`，host 约束“从哪里来”
 - 权限分四层：全局 → 数据库 → 表 → 列，授权尽量精确到数据库级
-- 远程访问建议：网段限制 + 最小权限授权 + 不使用 root
-- 账号有完整生命周期：创建 → 授权 → 修改 → 锁定 → 删除
+- 远程访问建议：监听边界 + 防火墙边界 + 账号 host 边界 + 最小权限授权
+- 标准权限语句会自动生效；直接改 `mysql.user` 等系统表后才需要 `FLUSH PRIVILEGES`
+- 账号有完整生命周期：创建 → 授权 → 验证 → 修改 → 锁定 → 删除
 - 生产环境启用 `validate_password` 组件强制密码复杂度
 </aside>
 
@@ -1132,7 +1292,7 @@ binlog 文件会持续增长，直到填满磁盘。MySQL 8.0 建议使用 `binl
 | --- | --- | --- |
 | 第 1 课：安装验证 | 装得起来 | 服务 active + `SELECT VERSION()` |
 | 第 2 课：配置基线 | 配得安全 | bind-address / utf8mb4 / time_zone 生效 |
-| 第 3 课：账号权限 | 管得住人 | VM-B 能用最小权限账号远程登录，且无权执行越权操作 |
+| 第 3 课：账号权限 | 管得住人 | 宿主机 Navicat 能用最小权限账号远程登录，且无权执行越权操作 |
 | 第 4 课：日志与恢复 | 能追溯/能恢复 | 能查看错误/慢查询；binlog 开启并能解释 PITR 三步走 |
 
 ---
