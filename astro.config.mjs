@@ -6,6 +6,11 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
   site: 'https://teaching-docs.pages.dev',
   output: 'static',
+  image: {
+    service: {
+      entrypoint: 'astro/assets/services/noop',
+    },
+  },
   integrations: [
     starlight({
       title: '教学文档',
