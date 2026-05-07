@@ -2,6 +2,9 @@
 title: "实验三：SMB与FTP共享服务渗透"
 ---
 
+---
+color: "linear-gradient(45deg, #23d4fd 0%, #3a98f0 50%, #b721ff 100%)"
+---
 # 实验三：SMB与FTP共享服务渗透
 
 > 对应章节：项目三 Windows服务器共享管理
