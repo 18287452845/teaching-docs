@@ -703,7 +703,7 @@ Restart-Computer -Force
 
 **SNMP服务配置**（重启后在图形界面完成）：
 
-1. 运行 `services.msc`，找到 **SNMP Service**
+1. WIN+R运行 `services.msc`，找到 **SNMP Service**
 2. 右键 → 属性 → **安全** 选项卡
 3. 添加团体名 `public`，权限设为 **READ ONLY**
 4. 勾选 **接受来自任何主机的 SNMP 数据包**
