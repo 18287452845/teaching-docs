@@ -1,74 +1,42 @@
-/* Sidebar toggle button global styles */
+/* ============================================
+   左侧文档列表展开/收起
+   ============================================ */
+
+/* 桌面端：切换按钮和侧边栏动画 */
 @media (min-width: 50rem) {
-	[data-has-sidebar] {
-		--sl-content-inline-start: var(--sl-sidebar-width);
-	}
-
-	.sl-sidebar-collapsed[data-has-sidebar] {
-		--sl-content-inline-start: 0px;
-	}
-
-	.sl-sidebar-collapsed .main-frame {
-		padding-inline-start: 0;
-	}
+	/* 按钮已由组件样式控制，此处只需确保层级 */
 }
 
-/* Right TOC hover behavior */
+/* ============================================
+   右侧文档大纲悬停显示
+   ============================================ */
+
+/* 桌面端 (>72rem)：右侧 TOC 默认收起，悬停展开 */
 @media (min-width: 72rem) {
-	/* Default: hide right sidebar content */
-	.right-sidebar-container .right-sidebar {
-		overflow: visible;
-	}
-
-	.right-sidebar-container .right-sidebar .right-sidebar-panel {
-		position: fixed;
-		right: 0;
-		top: var(--sl-nav-height);
-		width: var(--sl-sidebar-width);
-		height: calc(100vh - var(--sl-nav-height));
-		background: var(--sl-color-bg-sidebar);
-		border-inline-start: 1px solid var(--sl-color-hairline-shade);
-		transform: translateX(calc(100% - 12px));
+	/*
+	   核心思路：不修改 .right-sidebar-container 和 .main-pane 的 flex 宽度，
+	   只通过 transform 控制 .right-sidebar 的显示/隐藏。
+	   .right-sidebar 是 position:fixed + width:100%（视口宽度），
+	   transform: translateX(calc(100% - 16px)) 将其向右推，只露出左侧 16px 边缘。
+	*/
+	.right-sidebar {
+		transform: translateX(calc(100% - 16px));
 		transition: transform 0.3s ease;
-		padding: 1rem var(--sl-sidebar-pad-x);
-		overflow-y: auto;
-		scrollbar-width: none;
-		z-index: 10;
 	}
 
-	/* Expand on hover */
-	.right-sidebar-container .right-sidebar .right-sidebar-panel:hover,
-	.right-sidebar-container .right-sidebar:hover .right-sidebar-panel {
+	.right-sidebar:hover,
+	.right-sidebar:focus-within {
 		transform: translateX(0);
 	}
 
-	/* Hide the inner sl-container default width so it fills the panel */
-	.right-sidebar-container .right-sidebar .right-sidebar-panel .sl-container {
-		width: auto;
-		max-width: none;
-	}
-
-	/* Make the hover area a bit wider for easier triggering */
-	.right-sidebar-container {
-		position: relative;
-		width: 12px;
-		order: 2;
-		flex-shrink: 0;
-	}
-
-	.right-sidebar-container .right-sidebar {
-		position: fixed;
-		top: 0;
-		right: 0;
-		width: 12px;
-		height: 100vh;
-		padding-top: var(--sl-nav-height);
-		z-index: 10;
-	}
-
-	/* Adjust main pane to fill remaining space */
+	/*
+	   修复主内容区偏右问题：
+	   原始 Starlight 对 [data-has-sidebar][data-has-toc] .main-pane 设置了
+	   --sl-content-margin-inline: auto 0（右对齐）。
+	   当右侧 sidebar 收起时，内容视觉上会严重偏右。
+	   改为 auto（左右居中）让内容更居中。
+	*/
 	[data-has-sidebar][data-has-toc] .main-pane {
-		flex: 1;
-		width: auto;
+		--sl-content-margin-inline: auto;
 	}
 }

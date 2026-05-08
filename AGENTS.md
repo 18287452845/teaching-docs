@@ -65,9 +65,11 @@
 - **样式**: 收起时侧边栏向左滑出，主内容区自适应填充
 
 ### 右侧文档大纲悬停显示
-- **覆盖组件**: `PageSidebar` → `CustomPageSidebar.astro`
-- **交互**: 桌面端 (>72rem) 默认隐藏右侧大纲，仅露出右侧 12px 边缘；鼠标移入边缘区域后大纲滑出
-- **样式**: `transform: translateX(calc(100% - 12px))` 默认隐藏，悬停时 `translateX(0)`
+- **覆盖组件**: 无需覆盖 `PageSidebar`，通过 `custom.css` 直接控制 `.right-sidebar`
+- **交互**: 桌面端 (>72rem) 默认隐藏右侧大纲，仅露出右侧 16px 边缘；鼠标移入边缘区域后大纲滑出
+- **样式**: `.right-sidebar` 应用 `transform: translateX(calc(100% - 16px))` 默认隐藏，悬停时 `translateX(0)`
+- **注意**: 不修改 flex 布局宽度（`.right-sidebar-container` / `.main-pane`），避免破坏原始三栏比例
+- **主内容居中**: 覆盖 `--sl-content-margin-inline: auto`，解决右侧收起后内容偏右的问题
 
 ## 常见问题和预防
 - **同步失败**: 检查 mapping.json 配置是否正确

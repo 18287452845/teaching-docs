@@ -8,13 +8,21 @@ const { hasSidebar } = Astro.locals.starlightRoute;
 	<header class="header"><slot name="header" /></header>
 	{
 		hasSidebar && (
-			<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
-				<MobileMenuToggle />
+			<>
+				<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+					<MobileMenuToggle />
+					<div id="starlight__sidebar" class="sidebar-pane">
+						<div class="sidebar-content sl-flex">
+							<slot name="sidebar" />
+						</div>
+					</div>
+				</nav>
 				<button
 					id="sl-desktop-sidebar-toggle"
 					class="desktop-sidebar-toggle"
 					aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}
 					aria-expanded="true"
+					type="button"
 				>
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 						<line x1="3" y1="12" x2="21" y2="12"></line>
@@ -22,43 +30,39 @@ const { hasSidebar } = Astro.locals.starlightRoute;
 						<line x1="3" y1="18" x2="21" y2="18"></line>
 					</svg>
 				</button>
-				<div id="starlight__sidebar" class="sidebar-pane">
-					<div class="sidebar-content sl-flex">
-						<slot name="sidebar" />
-					</div>
-				</div>
-			</nav>
+			</>
 		)
 	}
 	<div class="main-frame"><slot /></div>
 </div>
 
-<script>
-	const toggle = document.getElementById('sl-desktop-sidebar-toggle');
-	const sidebarPane = document.getElementById('starlight__sidebar');
-	const html = document.documentElement;
+<script is:inline>
+	(function() {
+		var toggle = document.getElementById('sl-desktop-sidebar-toggle');
+		var html = document.documentElement;
+		if (!toggle) return;
 
-	function updateSidebarState(expanded: boolean) {
-		if (expanded) {
-			html.classList.remove('sl-sidebar-collapsed');
-			toggle?.setAttribute('aria-expanded', 'true');
-		} else {
-			html.classList.add('sl-sidebar-collapsed');
-			toggle?.setAttribute('aria-expanded', 'false');
+		function updateSidebarState(expanded) {
+			if (expanded) {
+				html.classList.remove('sl-sidebar-collapsed');
+				toggle.setAttribute('aria-expanded', 'true');
+			} else {
+				html.classList.add('sl-sidebar-collapsed');
+				toggle.setAttribute('aria-expanded', 'false');
+			}
 		}
-	}
 
-	// Restore state from localStorage
-	const saved = localStorage.getItem('sl-sidebar-collapsed');
-	if (saved !== null) {
-		updateSidebarState(saved === 'false');
-	}
+		var saved = localStorage.getItem('sl-sidebar-collapsed');
+		if (saved !== null) {
+			updateSidebarState(saved === 'false');
+		}
 
-	toggle?.addEventListener('click', () => {
-		const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
-		updateSidebarState(!isExpanded);
-		localStorage.setItem('sl-sidebar-collapsed', String(!isExpanded));
-	});
+		toggle.addEventListener('click', function() {
+			var isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+			updateSidebarState(!isExpanded);
+			localStorage.setItem('sl-sidebar-collapsed', String(!isExpanded));
+		});
+	})();
 </script>
 
 <style>
@@ -142,8 +146,8 @@ const { hasSidebar } = Astro.locals.starlightRoute;
 			.desktop-sidebar-toggle {
 				display: flex;
 				position: fixed;
-				z-index: calc(var(--sl-z-index-navbar) + 1);
-				left: calc(var(--sl-sidebar-width) - 1.25rem);
+				z-index: calc(var(--sl-z-index-menu) + 2);
+				left: calc(var(--sl-sidebar-width) - 1.125rem);
 				top: calc(var(--sl-nav-height) + 0.5rem);
 				width: 1.5rem;
 				height: 1.5rem;
