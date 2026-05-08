@@ -25,6 +25,11 @@ export default defineConfig({
         },
       ],
       lastUpdated: true,
+      customCss: ['./src/styles/custom.css'],
+      components: {
+        PageFrame: './src/components/CustomPageFrame.astro',
+        PageSidebar: './src/components/CustomPageSidebar.astro',
+      },
     }),
   ],
 });

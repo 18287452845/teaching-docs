@@ -24,10 +24,15 @@
 │   └── run-sync.mjs        # 内容同步入口
 ├── src/
 │   ├── assets/             # 图片等资源
+│   ├── components/         # Starlight 组件覆盖
+│   │   ├── CustomPageFrame.astro      # 自定义页面框架（左侧侧边栏切换）
+│   │   └── CustomPageSidebar.astro    # 自定义页面侧边栏（右侧目录悬停）
 │   ├── content/
 │   │   ├── config.ts       # 内容集合配置
 │   │   └── docs/           # 文档目录（Starlight 读取）
-│   └── content.config.ts
+│   ├── content.config.ts
+│   └── styles/
+│       └── custom.css      # 自定义样式（侧边栏/目录交互）
 ├── mapping.json            # 源文件到站点路由映射
 ├── sync.py                 # Python 同步脚本
 └── auto-sync.bat           # Windows 自动同步脚本
@@ -50,6 +55,19 @@
 2. 优先使用 pnpm 管理依赖（已在 packageManager 中锁定）
 3. 同步脚本依赖 Python 环境（sync.py）
 4. 构建产物为纯静态文件，适合部署到 Cloudflare Pages
+
+## 自定义组件说明
+
+### 左侧文档列表展开/收起
+- **覆盖组件**: `PageFrame` → `CustomPageFrame.astro`
+- **交互**: 桌面端 (>50rem) 显示一个切换按钮，点击可展开/收起左侧文档列表
+- **持久化**: 状态保存在 `localStorage` (`sl-sidebar-collapsed`)，刷新后保持
+- **样式**: 收起时侧边栏向左滑出，主内容区自适应填充
+
+### 右侧文档大纲悬停显示
+- **覆盖组件**: `PageSidebar` → `CustomPageSidebar.astro`
+- **交互**: 桌面端 (>72rem) 默认隐藏右侧大纲，仅露出右侧 12px 边缘；鼠标移入边缘区域后大纲滑出
+- **样式**: `transform: translateX(calc(100% - 12px))` 默认隐藏，悬停时 `translateX(0)`
 
 ## 常见问题和预防
 - **同步失败**: 检查 mapping.json 配置是否正确

@@ -1,0 +1,175 @@
+---
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<div class="page sl-flex">
+	<header class="header"><slot name="header" /></header>
+	{
+		hasSidebar && (
+			<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+				<MobileMenuToggle />
+				<button
+					id="sl-desktop-sidebar-toggle"
+					class="desktop-sidebar-toggle"
+					aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}
+					aria-expanded="true"
+				>
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<line x1="3" y1="12" x2="21" y2="12"></line>
+						<line x1="3" y1="6" x2="21" y2="6"></line>
+						<line x1="3" y1="18" x2="21" y2="18"></line>
+					</svg>
+				</button>
+				<div id="starlight__sidebar" class="sidebar-pane">
+					<div class="sidebar-content sl-flex">
+						<slot name="sidebar" />
+					</div>
+				</div>
+			</nav>
+		)
+	}
+	<div class="main-frame"><slot /></div>
+</div>
+
+<script>
+	const toggle = document.getElementById('sl-desktop-sidebar-toggle');
+	const sidebarPane = document.getElementById('starlight__sidebar');
+	const html = document.documentElement;
+
+	function updateSidebarState(expanded: boolean) {
+		if (expanded) {
+			html.classList.remove('sl-sidebar-collapsed');
+			toggle?.setAttribute('aria-expanded', 'true');
+		} else {
+			html.classList.add('sl-sidebar-collapsed');
+			toggle?.setAttribute('aria-expanded', 'false');
+		}
+	}
+
+	// Restore state from localStorage
+	const saved = localStorage.getItem('sl-sidebar-collapsed');
+	if (saved !== null) {
+		updateSidebarState(saved === 'false');
+	}
+
+	toggle?.addEventListener('click', () => {
+		const isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+		updateSidebarState(!isExpanded);
+		localStorage.setItem('sl-sidebar-collapsed', String(!isExpanded));
+	});
+</script>
+
+<style>
+	@layer starlight.core {
+		.page {
+			flex-direction: column;
+			min-height: 100vh;
+		}
+
+		.header {
+			z-index: var(--sl-z-index-navbar);
+			position: fixed;
+			inset-inline-start: 0;
+			inset-block-start: 0;
+			width: 100%;
+			height: var(--sl-nav-height);
+			border-bottom: 1px solid var(--sl-color-hairline-shade);
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			padding-inline-end: var(--sl-nav-pad-x);
+			background-color: var(--sl-color-bg-nav);
+		}
+
+		:global([data-has-sidebar]) .header {
+			padding-inline-end: calc(
+				var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+			);
+		}
+
+		.sidebar-pane {
+			visibility: var(--sl-sidebar-visibility, hidden);
+			position: fixed;
+			z-index: var(--sl-z-index-menu);
+			inset-block: var(--sl-nav-height) 0;
+			inset-inline-start: 0;
+			width: 100%;
+			background-color: var(--sl-color-black);
+			overflow-y: auto;
+			transition: transform 0.25s ease;
+		}
+
+		:global([aria-expanded='true']) ~ .sidebar-pane {
+			--sl-sidebar-visibility: visible;
+		}
+
+		.sidebar-content {
+			height: 100%;
+			min-height: max-content;
+			padding: 1rem var(--sl-sidebar-pad-x) 0;
+			flex-direction: column;
+			gap: 1rem;
+		}
+
+		@media (min-width: 50rem) {
+			.sidebar-content::after {
+				content: '';
+				padding-bottom: 1px;
+			}
+		}
+
+		.main-frame {
+			padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+			padding-inline-start: var(--sl-content-inline-start);
+			transition: padding-inline-start 0.25s ease;
+		}
+
+		.desktop-sidebar-toggle {
+			display: none;
+		}
+
+		@media (min-width: 50rem) {
+			:global([data-has-sidebar]) .header {
+				padding-inline-end: var(--sl-nav-pad-x);
+			}
+			.sidebar-pane {
+				--sl-sidebar-visibility: visible;
+				width: var(--sl-sidebar-width);
+				background-color: var(--sl-color-bg-sidebar);
+				border-inline-end: 1px solid var(--sl-color-hairline-shade);
+			}
+
+			.desktop-sidebar-toggle {
+				display: flex;
+				position: fixed;
+				z-index: calc(var(--sl-z-index-navbar) + 1);
+				left: calc(var(--sl-sidebar-width) - 1.25rem);
+				top: calc(var(--sl-nav-height) + 0.5rem);
+				width: 1.5rem;
+				height: 1.5rem;
+				align-items: center;
+				justify-content: center;
+				background: var(--sl-color-bg-sidebar);
+				border: 1px solid var(--sl-color-hairline-shade);
+				border-radius: 0.25rem;
+				color: var(--sl-color-text);
+				cursor: pointer;
+				transition: left 0.25s ease, transform 0.2s ease;
+				padding: 0;
+			}
+
+			.desktop-sidebar-toggle:hover {
+				background: var(--sl-color-gray-5);
+			}
+
+			:global(.sl-sidebar-collapsed) .sidebar-pane {
+				transform: translateX(-100%);
+			}
+
+			:global(.sl-sidebar-collapsed) .desktop-sidebar-toggle {
+				left: 0.5rem;
+				transform: rotate(180deg);
+			}
+		}
+	}
+</style>

@@ -1,0 +1,74 @@
+/* Sidebar toggle button global styles */
+@media (min-width: 50rem) {
+	[data-has-sidebar] {
+		--sl-content-inline-start: var(--sl-sidebar-width);
+	}
+
+	.sl-sidebar-collapsed[data-has-sidebar] {
+		--sl-content-inline-start: 0px;
+	}
+
+	.sl-sidebar-collapsed .main-frame {
+		padding-inline-start: 0;
+	}
+}
+
+/* Right TOC hover behavior */
+@media (min-width: 72rem) {
+	/* Default: hide right sidebar content */
+	.right-sidebar-container .right-sidebar {
+		overflow: visible;
+	}
+
+	.right-sidebar-container .right-sidebar .right-sidebar-panel {
+		position: fixed;
+		right: 0;
+		top: var(--sl-nav-height);
+		width: var(--sl-sidebar-width);
+		height: calc(100vh - var(--sl-nav-height));
+		background: var(--sl-color-bg-sidebar);
+		border-inline-start: 1px solid var(--sl-color-hairline-shade);
+		transform: translateX(calc(100% - 12px));
+		transition: transform 0.3s ease;
+		padding: 1rem var(--sl-sidebar-pad-x);
+		overflow-y: auto;
+		scrollbar-width: none;
+		z-index: 10;
+	}
+
+	/* Expand on hover */
+	.right-sidebar-container .right-sidebar .right-sidebar-panel:hover,
+	.right-sidebar-container .right-sidebar:hover .right-sidebar-panel {
+		transform: translateX(0);
+	}
+
+	/* Hide the inner sl-container default width so it fills the panel */
+	.right-sidebar-container .right-sidebar .right-sidebar-panel .sl-container {
+		width: auto;
+		max-width: none;
+	}
+
+	/* Make the hover area a bit wider for easier triggering */
+	.right-sidebar-container {
+		position: relative;
+		width: 12px;
+		order: 2;
+		flex-shrink: 0;
+	}
+
+	.right-sidebar-container .right-sidebar {
+		position: fixed;
+		top: 0;
+		right: 0;
+		width: 12px;
+		height: 100vh;
+		padding-top: var(--sl-nav-height);
+		z-index: 10;
+	}
+
+	/* Adjust main pane to fill remaining space */
+	[data-has-sidebar][data-has-toc] .main-pane {
+		flex: 1;
+		width: auto;
+	}
+}
