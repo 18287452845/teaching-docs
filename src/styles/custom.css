@@ -33,13 +33,22 @@
 	}
 
 	/*
-	   修复主内容区偏右问题：
-	   原始 Starlight 对 [data-has-sidebar][data-has-toc] .main-pane 设置了
-	   --sl-content-margin-inline: auto 0（右对齐）。
-	   当右侧 sidebar 收起时，内容视觉上会严重偏右。
-	   改为 auto（左右居中）让内容更居中。
+	   默认状态恢复原始右对齐，保持 Starlight 原始三栏视觉平衡。
+	   仅在左侧 sidebar 收起时让主内容占满并居中。
 	*/
 	[data-has-sidebar][data-has-toc] .main-pane {
+		--sl-content-margin-inline: auto 0;
+	}
+
+	/* 左侧收起时：右侧容器缩为 16px，主内容占满剩余空间并居中 */
+	.sl-sidebar-collapsed [data-has-sidebar][data-has-toc] .right-sidebar-container {
+		width: 16px;
+		flex-shrink: 0;
+	}
+
+	.sl-sidebar-collapsed [data-has-sidebar][data-has-toc] .main-pane {
 		--sl-content-margin-inline: auto;
+		flex: 1 1 auto;
+		width: auto;
 	}
 }

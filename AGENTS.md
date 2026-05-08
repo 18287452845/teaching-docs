@@ -63,13 +63,15 @@
 - **交互**: 桌面端 (>50rem) 显示一个切换按钮，点击可展开/收起左侧文档列表
 - **持久化**: 状态保存在 `localStorage` (`sl-sidebar-collapsed`)，刷新后保持
 - **样式**: 收起时侧边栏向左滑出，主内容区自适应填充
+- **按钮位置**: 切换按钮放在 `<nav class="sidebar">` 外部，与 `<header>`、`<main-frame>` 同级，避免被 sidebar 内部元素遮挡
+- **脚本**: 使用 `<script is:inline>` 纯 JavaScript，直接内联到 HTML 中执行，避免 Astro 模块脚本的执行时机问题
 
 ### 右侧文档大纲悬停显示
 - **覆盖组件**: 无需覆盖 `PageSidebar`，通过 `custom.css` 直接控制 `.right-sidebar`
 - **交互**: 桌面端 (>72rem) 默认隐藏右侧大纲，仅露出右侧 16px 边缘；鼠标移入边缘区域后大纲滑出
-- **样式**: `.right-sidebar` 应用 `transform: translateX(calc(100% - 16px))` 默认隐藏，悬停时 `translateX(0)`
-- **注意**: 不修改 flex 布局宽度（`.right-sidebar-container` / `.main-pane`），避免破坏原始三栏比例
-- **主内容居中**: 覆盖 `--sl-content-margin-inline: auto`，解决右侧收起后内容偏右的问题
+- **样式**: `.right-sidebar` 应用 `right:0; width:var(--sl-sidebar-width); transform:translateX(calc(100% - 16px))` 默认隐藏，悬停时 `translateX(0)`
+- **注意**: `.right-sidebar` 是 `position:fixed`，必须显式设置 `right:0` 和固定宽度，确保 transform 后仍在视口内接收 hover 事件
+- **主内容居中**: 默认状态恢复 `--sl-content-margin-inline: auto 0`（原始右对齐）。左侧收起时，将 `right-sidebar-container` 缩为 `16px` 并让 `.main-pane` 占满剩余空间，内容通过 `--sl-content-margin-inline: auto` 居中
 
 ## 常见问题和预防
 - **同步失败**: 检查 mapping.json 配置是否正确
