@@ -16,10 +16,13 @@
 	/*
 	   核心思路：不修改 .right-sidebar-container 和 .main-pane 的 flex 宽度，
 	   只通过 transform 控制 .right-sidebar 的显示/隐藏。
-	   .right-sidebar 是 position:fixed + width:100%（视口宽度），
-	   transform: translateX(calc(100% - 16px)) 将其向右推，只露出左侧 16px 边缘。
+	   给 .right-sidebar 设置 right:0 + width:var(--sl-sidebar-width)，
+	   使其右边缘固定在视口右侧，transform 后只露出左侧 16px 边缘。
 	*/
 	.right-sidebar {
+		right: 0;
+		left: auto;
+		width: var(--sl-sidebar-width);
 		transform: translateX(calc(100% - 16px));
 		transition: transform 0.3s ease;
 	}
