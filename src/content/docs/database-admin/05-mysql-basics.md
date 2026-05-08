@@ -604,10 +604,10 @@ sudo mysql
 -- 先检查密码验证组件是否已安装
 SELECT COMPONENT_ID, COMPONENT_URN FROM mysql.component;
 -- 如果没有 component_validate_password 的记录，才执行下面这行安装：
-INSTALL COMPONENT 'file://component_validate_password';
+--INSTALL COMPONENT 'file://component_validate_password';
 
-SET GLOBAL validate_password.policy = LOW;
-SET GLOBAL validate_password.length = 6;
+--SET GLOBAL validate_password.policy = LOW;
+--SET GLOBAL validate_password.length = 6;
 
 -- 1) 准备示例库和示例表
 CREATE DATABASE IF NOT EXISTS stusta;
