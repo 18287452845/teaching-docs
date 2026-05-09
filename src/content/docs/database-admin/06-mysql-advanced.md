@@ -1,827 +1,686 @@
 ---
-title: "06.项目六 MySQL数据库高级安全维护"
+title: 项目六 MySQL 数据库高级安全维护
+sidebar:
+  order: 6
 ---
 
-# 06 项目六 MySQL 数据库高级安全维护
+# 项目六 MySQL 数据库高级安全维护
 
-🎯 **本项目学习目标**
-
-- 能使用 Navicat 完成 MySQL 的连接管理、导入导出、备份还原与权限管理
-- 能结合命令行和图形化工具完成权限审计、账号管理与资源限制配置
-- 能使用 mysqldump 完成逻辑备份与还原，并理解脚本化备份的基本思路
-- 能理解 MySQL 主从复制、GTID 复制与常见高可用方案的基本原理
-- 能识别常见攻击面，并给出对应的安全加固措施
-
-<aside>
-🧭
-
-**主线地图**：图形化管理 → 权限精细化 → 备份还原 → 复制扩展 → 攻防加固。
-
-</aside>
-
-<aside>
-🖥️
-
-**前置条件**
-
-- Ubuntu 虚拟机已安装 MySQL 8.0（项目五已完成）
-- Windows 宿主机已安装 Navicat for MySQL（或 Navicat Premium）
-- 已完成项目五中的数据库 `stusta` 与账号 `app@192.168.100.%`
-
-**课堂产出**
-
-- 能用 Navicat 从 Windows 宿主机连接 Ubuntu 虚拟机上的 MySQL，并完成数据导入导出
-- 能创建多个角色账号并验证权限边界
-- 能使用 `mysqldump` 完成备份与还原
-- 能解释主从复制流程和常见攻击防御思路
-
-</aside>
+> **前置知识**：本项目是 **项目五** 的延伸。项目五你已经学会了用 Navicat 管理数据库、创建账号并分配权限、用 mysqldump 做备份还原，以及理解了主从复制的基本原理。项目六将在此基础上，带你进入**生产级安全运维**——你将面对项目五没有覆盖的真实安全场景：审计与合规、入侵检测与响应、数据脱敏与加密、高级备份恢复策略、以及完整的加固 Checklist。
 
 ---
 
-## 第 1 课 Navicat 图形化管理：用得顺手
+## 🎯 项目目标
 
-### 1.1 本课要解决的问题
+完成本项目后，你能够：
 
-- 能通过 Navicat 连接 MySQL 服务器
-- 能用 Navicat 完成数据导入导出
-- 能用 Navicat 完成备份还原
-- 能用 Navicat 管理用户权限
+- 开启并分析 MySQL 审计日志，追踪异常操作
+- 检测并响应 SQL 注入、暴力破解、UDF 提权等真实攻击
+- 对敏感数据做脱敏和透明加密（TDE），满足合规要求
+- 设计增量备份 + binlog 时间点恢复（PITR）策略，确保 RPO 接近零
+- 从零搭建半同步复制 + 自动故障切换，保障高可用
+- 执行一份完整的生产环境加固 Checklist
 
-### 1.2 为什么还要学 Navicat
+---
 
-命令行适合精确操作和脚本自动化，Navicat 适合日常浏览、批量操作和快速备份。两者不是替代关系，而是互补关系。
+## 第 1 课：审计与合规——谁动了数据库？
+
+### 1.1 为什么需要审计？
+
+在项目五中，你学会了用 `SHOW GRANTS` 查看权限，但这只能看到"谁有什么权限"，看不到"谁在什么时候做了什么"。一旦发生数据泄露或误操作，没有审计日志就等于"黑箱"。
+
+**审计的核心问题**：
+
+| 问题 | 没有审计 | 有审计 |
+| --- | --- | --- |
+| 谁删了数据？ | 不知道 | 精确到用户、时间、SQL |
+| 什么时候发生的？ | 不知道 | 秒级时间戳 |
+| 是误操作还是恶意？ | 无法判断 | 结合操作上下文可判定 |
+| 如何满足合规要求？ | 无法通过审计 | 可导出审计报告 |
+
+### 1.2 MySQL 审计方案对比
+
+| 方案 | 原理 | 优点 | 缺点 |
+| --- | --- | --- | --- |
+| **通用日志 (general_log)** | 记录所有 SQL | 无需插件、开箱即用 | 性能影响大、日志量大 |
+| **慢查询日志 + 错误日志** | 只记录慢/错误 SQL | 性能影响小 | 覆盖不全 |
+| **企业级审计插件** | MySQL Enterprise 自带 | 功能最完整 | 需要企业版授权 |
+| **MariaDB Audit Plugin** | 第三方插件 | 免费、兼容社区版 | 需额外安装 |
+| **binlog** | 记录所有写操作 | 默认开启、可用于恢复 | 只记录写、不记录读 |
 
 <aside>
-💬
+💡
 
-**使用建议**
-
-- 命令行：适合生产排错、脚本自动化、远程批处理
-- Navicat：适合查看数据、快速导入导出、可视化权限管理
-- 面试或工作中，DBA 往往两种方式都要会
+**项目五衔接**：你在项目五中已经用 binlog 做过主从复制的数据同步，但 binlog 只记录写操作。如果需要审计 `SELECT` 读取敏感数据的行为，必须开启通用日志或审计插件。
 
 </aside>
 
-### 1.3 Navicat 核心功能
+### 1.3 实操：开启通用日志做快速审计
 
-| 功能模块 | 说明 | 使用频率 |
-| --- | --- | --- |
-| 连接管理 | 管理多个 MySQL 连接，支持 SSH 隧道 | 每次使用 |
-| 数据编辑 | 表格化查看与编辑数据 | 高 |
-| 查询编辑器 | SQL 编写与执行 | 高 |
-| 导入/导出 | 支持 CSV、Excel、SQL、JSON 等格式 | 中 |
-| 备份/还原 | 支持数据库备份与恢复 | 高 |
-| 用户权限管理 | 图形化管理账号和权限 | 中 |
-| ER 图 | 可视化表结构和关系 | 低 |
+```sql
+-- 查看当前通用日志状态
+SHOW VARIABLES LIKE 'general_log%';
 
-### 1.4 建立连接
+-- 开启通用日志（临时生效，重启后失效）
+SET GLOBAL general_log = ON;
+SET GLOBAL general_log_file = '/var/log/mysql/general.log';
 
-#### 连接 MySQL 服务器
-
-1. 打开 Navicat → 点击左上角 **连接** → 选择 **MySQL**
-2. 填写连接信息：
-
-| 字段 | 值（示例） | 说明 |
-| --- | --- | --- |
-| 连接名 | Ubuntu-MySQL | 自定义名称 |
-| 主机 | 192.168.100.20 | Ubuntu 虚拟机 IP |
-| 端口 | 3306 | 默认端口 |
-| 用户名 | app | 项目五创建的账号 |
-| 密码 | 123456 | 对应密码 |
-
-3. 点击 **测试连接** → 显示“连接成功” → 点击 **确定**
-
-<aside>
-🔧
-
-**连接失败排查清单**
-
-| 现象 | 可能原因 | 解决方法 |
-| --- | --- | --- |
-| Can't connect to MySQL server | MySQL 未启动或 bind-address 未开放 | `sudo systemctl status mysql` 检查 |
-| Access denied for user | 用户名、密码或主机不匹配 | `SELECT user, host FROM mysql.user;` |
-| Authentication plugin error | 客户端版本不支持 `caching_sha2_password` | 升级 Navicat 或调整认证插件 |
-| Host is not allowed | 账号 host 不允许该 IP | 修改 host 或创建新账号 |
-
-</aside>
-
-#### 使用 SSH 隧道连接（推荐）
-
-生产环境中，不建议直接暴露 MySQL 端口。Navicat 支持通过 SSH 隧道连接：
-
-1. 新建连接 → 切换到 **SSH** 选项卡
-2. 勾选 **使用 SSH 通道**
-3. 填写 SSH 信息：
-
-| 字段 | 值（示例） |
-| --- | --- |
-| 主机 | 192.168.100.20 | Ubuntu 虚拟机 IP |
-| 端口 | 22 | SSH 默认端口 |
-| 用户名 | ubuntu | Ubuntu 虚拟机登录用户 |
-| 认证方式 | 密码 / 密钥文件 |
-
-4. 返回 **常规** 选项卡，主机改为 `127.0.0.1`
-
-<aside>
-💬
-
-**SSH 隧道的优势**：MySQL 端口不需要直接对外开放，所有流量通过 SSH 加密传输。
-
-</aside>
-
-### 1.5 导入测试数据
-
-在实际操作前，先导入一个示例数据库。MySQL 官方提供了 `employees` 示例数据库：
-
-```bash
-# 在 Ubuntu 虚拟机上下载并导入
-git clone https://github.com/datacharmer/test_db.git
-cd test_db
-
-# 导入
-mysql -u root -p < employees.sql
-
-# 验证导入
-mysql -u root -p -e "USE employees; SELECT COUNT(*) AS '员工总数' FROM employees;"
+-- 测试：执行一条查询，然后查看日志
+SELECT * FROM mysql.user WHERE user = 'root';
 ```
 
-导入完成后，在 Navicat 中右键连接名 → **刷新**，即可看到 `employees` 数据库及其表结构。
+查看日志输出：
 
-#### 数据导入（CSV / Excel → MySQL）
+```bash
+# 在服务器上查看
+tail -f /var/log/mysql/general.log
 
-1. 在 Navicat 中展开目标数据库
-2. 右键目标表 → **导入向导**
-3. 选择文件格式（CSV / Excel / JSON 等）
-4. 选择源文件 → 预览数据
-5. 字段映射：确认文件列与表字段对应关系
-6. 选择导入模式：
-   - **添加**：追加新记录
-   - **更新**：根据主键更新已有记录
-   - **添加或更新**：不存在则插入，存在则更新
-7. 点击 **开始** → 查看导入结果
+# 输出示例：
+# 2025-01-15T10:30:45.123456Z  12 Query  SELECT * FROM mysql.user WHERE user = 'root'
+```
 
-#### 数据导出（MySQL → CSV / Excel / SQL）
+**通用日志字段解析**：
 
-1. 在 Navicat 中右键表名或数据库名
-2. 选择 **导出向导**
-3. 选择导出格式：
-   - **SQL 文件**：适合迁移和恢复
-   - **CSV / Excel**：适合分析和报表
-   - **JSON / XML**：适合程序读取
-4. 配置选项（字段分隔符、是否含表头等）
-5. 选择保存路径 → **开始**
+| 字段 | 含义 |
+| --- | --- |
+| 时间戳 | 操作发生时间（精确到微秒） |
+| 连接 ID | 哪个会话执行的 |
+| 命令类型 | Query / Connect / Quit 等 |
+| SQL 内容 | 完整的 SQL 语句 |
 
-<aside>
-💬
+> **生产注意**：通用日志会记录所有 SQL，包括密码哈希等敏感信息。生产环境不建议长期开启，仅用于排查问题时短期启用。
 
-**导出 SQL vs 导出 CSV**
+### 1.4 实操：安装 MariaDB Audit Plugin（社区版推荐）
 
-- 导出 SQL：保留表结构和数据类型，适合迁移和恢复
-- 导出 CSV：便于分析和交换数据，但不保留结构信息
+```sql
+-- 检查是否已安装
+SELECT PLUGIN_NAME, PLUGIN_STATUS FROM INFORMATION_SCHEMA.PLUGINS
+  WHERE PLUGIN_NAME LIKE '%audit%';
 
-</aside>
+-- 安装审计插件
+INSTALL PLUGIN server_audit SONAME 'server_audit.so';
 
-### 1.6 备份与还原
+-- 配置审计行为
+SET GLOBAL server_audit_events = 'CONNECT,QUERY,TABLE';
+SET GLOBAL server_audit_logging = ON;
+SET GLOBAL server_audit_file_path = '/var/log/mysql/audit.log';
 
-### 方式一：数据库转储（生成 SQL 文件）
+-- 查看配置
+SHOW VARIABLES LIKE 'server_audit%';
+```
 
-这是最通用的备份方式，生成的 `.sql` 文件可以在任何 MySQL 实例上恢复。
+**审计事件类型说明**：
 
-**备份**：
+| 事件类型 | 记录内容 | 典型场景 |
+| --- | --- | --- |
+| `CONNECT` | 连接/断开、用户、IP | 检测异常来源 IP |
+| `QUERY` | 所有 SQL 语句 | 追踪 DDL/DML 操作 |
+| `TABLE` | 表访问记录 | 追踪敏感表读取 |
+| `QUERY_DDL` | 仅 DDL（CREATE/ALTER/DROP） | 追踪结构变更 |
+| `QUERY_DML` | 仅 DML（INSERT/UPDATE/DELETE） | 追踪数据修改 |
 
-1. 右键数据库名 → **转储 SQL 文件** → **结构和数据**
-2. 选择保存路径，生成 `.sql` 文件
+### 1.5 实操：分析审计日志发现异常
 
-**还原**：
+**场景**：某天发现数据被删除，需要追查责任人。
 
-1. 右键连接名 → **运行 SQL 文件**
-2. 选择之前导出的 `.sql` 文件
-3. 等待执行完成
+```bash
+# 查找所有 DELETE 操作
+grep "DELETE" /var/log/mysql/audit.log | tail -20
 
-### 方式二：Navicat 备份模块
+# 查找特定表的访问记录
+grep "salary" /var/log/mysql/audit.log
 
-Navicat 内置的备份模块支持计划任务，更适合日常运维。
+# 查找非工作时间的操作（晚上 22:00 - 次日 06:00）
+grep -E "20[0-9]{2}-[0-9]{2}-[0-9]{2}T(2[2-3]|0[0-5]):" /var/log/mysql/audit.log
+```
 
-**创建备份**：
+**审计日志关键字段**：
 
-1. 点击顶部 **备份** 图标
-2. 点击 **新建备份** → 选择要备份的数据库
-3. 点击 **开始** → 生成 `.nb3` 格式备份文件
+```
+20250115 10:30:45,db_user,172.16.1.100,12,QUERY,testdb,'DROP TABLE users',0
+```
 
-**还原备份**：
-
-1. 点击 **备份** 图标 → 选择备份文件
-2. 右键 → **还原备份**
-3. 确认目标数据库 → **开始**
-
-#### 设置自动计划任务
-
-1. Navicat 顶部工具栏 → **自动运行**
-2. 点击 **新建批处理作业** → 添加备份任务
-3. 点击 **设置任务计划** → 配置执行频率
-   - 每天凌晨 2:00
-   - 每周日凌晨 3:00
-4. 保存并启用
-
-<aside>
-⚠️
-
-**备份文件安全提醒**
-
-- 备份文件本身也是敏感资产
-- 不要把备份和数据库放在同一台服务器上
-- 定期验证备份是否能成功还原
-
-</aside>
-
-### 1.7 数据库维护工具
-
-| 操作 | 等价 SQL | 作用 | 何时使用 |
-| --- | --- | --- | --- |
-| 分析表 | `ANALYZE TABLE` | 更新索引统计信息 | 查询变慢时 |
-| 检查表 | `CHECK TABLE` | 检查表是否损坏 | 异常断电后 |
-| 优化表 | `OPTIMIZE TABLE` | 整理碎片、回收空间 | 大量 DELETE 后 |
-| 修复表 | `REPAIR TABLE` | 修复损坏的 MyISAM 表 | 仅限旧引擎 |
-
-<aside>
-💬
-
-**InnoDB 与 MyISAM 的差异**
-
-MySQL 8.0 默认使用 InnoDB，支持事务和崩溃恢复，一般不需要手工修复；MyISAM 是旧引擎，已不适合作为新项目默认选择。
-
-</aside>
+| 字段 | 示例值 | 含义 |
+| --- | --- | --- |
+| 时间戳 | `20250115 10:30:45` | 操作时间 |
+| 用户名 | `db_user` | 执行操作的账号 |
+| 来源 IP | `172.16.1.100` | 客户端地址 |
+| 连接 ID | `12` | 会话标识 |
+| 事件类型 | `QUERY` | 操作类型 |
+| 数据库 | `testdb` | 目标数据库 |
+| SQL 内容 | `DROP TABLE users` | 完整语句 |
+| 返回码 | `0` | 0=成功，非0=失败 |
 
 <aside>
 ✅
 
 **第 1 课小结**
 
-- 能用 Navicat 连接 MySQL，并理解 SSH 隧道的意义
-- 能完成数据导入导出和数据库转储
-- 能使用备份模块和计划任务做日常备份
-- 能根据场景选择 ANALYZE / CHECK / OPTIMIZE / REPAIR
+- 理解审计的价值：从"谁有什么权限"到"谁做了什么"
+- 掌握通用日志的开启与分析（排查用，不要长期开）
+- 掌握 MariaDB Audit Plugin 的安装与配置（生产推荐）
+- 能通过审计日志定位异常操作（异常时间、敏感表、危险 SQL）
 
 </aside>
 
 ---
 
-## 第 2 课 权限精细化管理：管得住人
+## 第 2 课：入侵检测与响应——数据库被攻击了怎么办？
 
-### 2.1 本课要解决的问题
+### 2.1 常见攻击方式与项目五知识的延伸
 
-- 能在 Navicat 中管理用户权限
-- 能用命令行完成完整的权限管理流程
-- 能理解权限排查的基本思路
-- 能说出常见高危权限与常见攻击面的防御措施
+在项目五中，你了解了暴力破解、未授权访问、UDF 提权的防御措施。本课将带你**深入原理**并**实操检测与响应**。
 
-### 2.2 权限验证流程
+| 攻击方式 | 项目五认知 | 项目六延伸 |
+| --- | --- | --- |
+| 暴力破解 | 知道要设强密码 | 学会检测暴力破解、配置账户锁定策略 |
+| 未授权访问 | 知道要限制 bind-address | 学会网络层+数据库层双重防御 |
+| SQL 注入 | 未涉及 | 项目六重点：检测、防御、应急响应 |
+| UDF 提权 | 知道要限制 FILE 权限 | 学会检测是否已被提权、如何清理 |
 
-客户端发起连接后，MySQL 先做身份验证，再做权限验证：
+### 2.2 SQL 注入：最危险的数据库攻击
 
-```text
-连接请求
-  ↓
-认证：用户名 + 主机 + 密码
-  ↓
-授权：全局 → 数据库 → 表 → 列
-  ↓
-允许或拒绝操作
+**SQL 注入原理**：攻击者通过前端输入拼接到 SQL 中，改变原 SQL 语义。
+
+**示例——一个危险的登录接口**：
+
+```php
+// 危险写法：直接拼接
+$sql = "SELECT * FROM users WHERE username='" . $_POST['username'] . "' AND password='" . $_POST['password'] . "'";
+
+// 攻击者输入：username = admin' -- 
+// 实际执行：SELECT * FROM users WHERE username='admin' --' AND password='xxx'
+// 结果：密码验证被注释掉，直接以 admin 登录
+```
+
+**SQL 注入分类**：
+
+| 类型 | 特征 | 危害等级 |
+| --- | --- | --- |
+| 联合查询注入 (UNION) | 可直接读取其他表数据 | 高 |
+| 盲注 (Boolean/Time) | 无法直接看结果，通过条件推断 | 高 |
+| 报错注入 | 利用数据库报错信息泄露数据 | 中 |
+| 堆叠注入 | 一次注入执行多条 SQL（如 DROP TABLE） | 极高 |
+
+### 2.3 实操：检测 SQL 注入攻击
+
+**方法一：通过审计日志检测**
+
+```bash
+# 查找疑似注入的 SQL 模式
+grep -iE "(UNION SELECT|OR\s+1=1|;\s*DROP|;\s*DELETE|'\s*--\s|'\s*#\s|SLEEP\(|BENCHMARK\()" /var/log/mysql/audit.log
+```
+
+**方法二：通过慢查询日志检测盲注**
+
+盲注通常使用 `SLEEP()` 或 `BENCHMARK()` 函数，导致查询时间异常：
+
+```sql
+-- 检查是否有 SLEEP 调用
+SELECT * FROM mysql.slow_log
+  WHERE sql_text LIKE '%SLEEP%'
+  OR sql_text LIKE '%BENCHMARK%';
+```
+
+**方法三：通过 performance_schema 监控异常查询**
+
+```sql
+-- 查找执行次数异常多的语句（可能正在被注入扫描）
+SELECT DIGEST_TEXT, COUNT_STAR, SUM_TIMER_WAIT/1000000000 AS total_sec
+FROM performance_schema.events_statements_summary_by_digest
+ORDER BY COUNT_STAR DESC
+LIMIT 10;
+
+-- 查找返回行数异常多的查询（可能正在拖库）
+SELECT DIGEST_TEXT, SUM_ROWS_EXAMINED, SUM_ROWS_SENT
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SUM_ROWS_SENT > 10000
+ORDER BY SUM_ROWS_SENT DESC
+LIMIT 10;
+```
+
+### 2.4 实操：暴力破解检测与防御
+
+**检测暴力破解**：
+
+```bash
+# 从审计日志统计失败连接
+grep "CONNECT" /var/log/mysql/audit.log | grep "FAILED" | \
+  awk '{print $3}' | sort | uniq -c | sort -rn | head -10
+
+# 输出示例：
+#   1523 192.168.1.200    ← 异常！1500+ 次失败连接
+#      2 10.0.0.5          ← 正常，偶尔输错密码
+```
+
+**防御措施一：账户锁定策略（MySQL 8.0+）**
+
+```sql
+-- 项目五中你创建过用户，现在加上登录失败锁定策略
+-- 连续失败 3 次锁定 1 天
+CREATE USER 'app_user'@'10.0.%'
+  IDENTIFIED BY 'StrongP@ss123!'
+  FAILED_LOGIN_ATTEMPTS 3
+  PASSWORD_LOCK_TIME 1;
+
+-- 修改已有用户的锁定策略
+ALTER USER 'app_user'@'10.0.%'
+  FAILED_LOGIN_ATTEMPTS 3
+  PASSWORD_LOCK_TIME 1;
+
+-- 手动解锁被锁定的账户
+ALTER USER 'app_user'@'10.0.%' ACCOUNT UNLOCK;
+```
+
+**防御措施二：密码复杂度策略（项目五延伸）**
+
+项目五中你只是设置了密码，现在要确保密码足够强：
+
+```sql
+-- 安装密码验证插件（MySQL 8.0 默认已安装）
+-- 查看当前策略
+SHOW VARIABLES LIKE 'validate_password%';
+
+-- 设置密码策略（MEDIUM = 中等强度）
+SET GLOBAL validate_password.policy = 'MEDIUM';
+SET GLOBAL validate_password.length = 12;
+SET GLOBAL validate_password.mixed_case_count = 1;
+SET GLOBAL validate_password.number_count = 1;
+SET GLOBAL validate_password.special_char_count = 1;
+```
+
+**密码策略等级对比**：
+
+| 策略等级 | 要求 |
+| --- | --- |
+| LOW | 仅检查长度 |
+| MEDIUM | 长度 + 大小写 + 数字 + 特殊字符 |
+| STRONG | MEDIUM + 字典词检查 |
+
+### 2.5 实操：UDF 提权检测与清理
+
+**项目五衔接**：项目五告诉你"不授予 FILE 权限"就能防 UDF 提权，但如果你接手了一台已经运行多年的服务器，怎么知道是否已经被提权？
+
+**检测步骤**：
+
+```sql
+-- 1. 检查是否有可疑的自定义函数
+SELECT * FROM mysql.func;
+
+-- 正常情况下应该为空或只有业务需要的函数
+-- 如果出现 cmdshell、exec、system 等函数名，极可能已被 UDF 提权
+
+-- 2. 检查插件目录中的可疑文件
+SHOW VARIABLES LIKE 'plugin_dir';
+
+-- 3. 检查哪些用户有 FILE 权限（UDF 提权的前提）
+SELECT User, Host FROM mysql.user WHERE File_priv = 'Y';
+
+-- 4. 检查是否有不正常的 SUPER 权限用户
+SELECT User, Host FROM mysql.user WHERE Super_priv = 'Y';
+```
+
+**清理步骤**：
+
+```sql
+-- 删除恶意 UDF 函数
+DROP FUNCTION IF EXISTS cmdshell;
+
+-- 收回不必要的 FILE 权限
+REVOKE FILE ON *.* FROM 'suspicious_user'@'%';
+
+-- 删除恶意用户
+DROP USER 'suspicious_user'@'%';
+
+-- 检查插件目录，删除恶意 so/dll 文件
+-- 需要在服务器上操作：
+-- ls -la /usr/lib/mysql/plugin/
+-- 删除不明文件后重启 MySQL
+```
+
+### 2.6 入侵应急响应流程
+
+当确认数据库被入侵后，按以下流程操作：
+
+```
+1. 隔离 → 立即断开数据库外网访问（防火墙/安全组）
+2. 保全 → 导出审计日志、binlog、错误日志（不要重启，保留现场）
+3. 排查 → 确认入侵方式（SQL注入？暴力破解？UDF提权？）
+4. 止损 → 删除恶意账号/函数、修复注入漏洞、重置被泄露的密码
+5. 恢复 → 从最近的干净备份恢复数据（项目五的备份技能用上了）
+6. 加固 → 按第 5 课 Checklist 全面加固
+7. 复盘 → 记录事件时间线、根因、改进措施
 ```
 
 <aside>
-💬
+💡
 
-**排查权限问题的顺序**
-
-1. 看当前连接身份：`SELECT USER(), CURRENT_USER();`
-2. 看账号拥有哪些权限：`SHOW GRANTS;`
-3. 看账号是否被锁定：`SELECT user, host, account_locked FROM mysql.user;`
-4. 看密码是否过期：`SELECT user, host, password_expired FROM mysql.user;`
+**项目五衔接**：步骤 5 中的"从备份恢复"，正是你在项目五第 3 课练过的 mysqldump 备份还原技能。但现在你知道，如果只做了全量备份，可能丢失几个小时的数据——第 3 课将教你如何做到近零丢失。
 
 </aside>
-
-### 权限存储表
-
-| 表名 | 存储内容 | 查看方式 |
-| --- | --- | --- |
-| `mysql.user` | 全局权限 + 账号信息 | `SELECT * FROM mysql.user WHERE user='app'\G` |
-| `mysql.db` | 数据库级权限 | `SELECT * FROM mysql.db WHERE user='app'\G` |
-| `mysql.tables_priv` | 表级权限 | `SELECT * FROM mysql.tables_priv WHERE user='app'\G` |
-| `mysql.columns_priv` | 列级权限 | `SELECT * FROM mysql.columns_priv WHERE user='app'\G` |
-
-### 2.3 在 Navicat 中管理用户权限
-
-#### 创建新用户
-
-1. 在 Navicat 中点击顶部 **用户** 图标
-2. 点击 **新建用户**
-3. 填写账号信息：
-
-| 字段 | 示例值 | 说明 |
-| --- | --- | --- |
-| 用户名 | `report` | 账号名 |
-| 主机 | `192.168.100.%` | 允许连接的来源 |
-| 密码 | `123456` | 密码 |
-| 密码过期 | 不过期 | 课堂环境建议设为不过期，生产环境设 90 天 |
-
-4. 切换到 **权限** 选项卡 → 勾选允许的权限
-5. 点击 **保存**
-
-#### 修改已有用户权限
-
-1. 在用户列表中双击目标用户
-2. 切换到 **权限** 选项卡
-3. 添加或移除数据库权限
-4. 保存
-
-### 2.4 命令行完整权限管理演练
-
-> **先降低密码策略**：项目五中已安装 `validate_password` 组件，MEDIUM 策略会拒绝 `123456`。创建账号前先降低策略（生产环境恢复为 MEDIUM）：
-
-```sql
--- 检查组件是否已安装
-SELECT COMPONENT_ID, COMPONENT_URN FROM mysql.component
-WHERE COMPONENT_URN LIKE '%validate_password%';
-
--- 若未安装，先安装
-INSTALL COMPONENT 'file://component_validate_password';
-
--- 降低策略为 LOW，最小长度为 6
-SET GLOBAL validate_password.policy = LOW;
-SET GLOBAL validate_password.length = 6;
-```
-
-#### 创建多角色账号
-
-```sql
--- 只读账号
-CREATE USER 'reader'@'192.168.100.%' IDENTIFIED BY '123456';
-GRANT SELECT ON employees.* TO 'reader'@'192.168.100.%';
-
--- 读写账号
-CREATE USER 'writer'@'192.168.100.%' IDENTIFIED BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE ON employees.* TO 'writer'@'192.168.100.%';
-
--- 开发者账号
-CREATE USER 'developer'@'192.168.100.%' IDENTIFIED BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, CREATE TEMPORARY TABLES
-  ON employees.*
-  TO 'developer'@'192.168.100.%';
-
-SHOW GRANTS FOR 'reader'@'192.168.100.%';
-SHOW GRANTS FOR 'writer'@'192.168.100.%';
-SHOW GRANTS FOR 'developer'@'192.168.100.%';
-```
-
-#### 权限修改：授权 + 撤权
-
-```sql
--- 给 writer 添加 CREATE 权限
-GRANT CREATE ON employees.* TO 'writer'@'192.168.100.%';
-
--- 撤销 developer 的 ALTER 权限
-REVOKE ALTER ON employees.* FROM 'developer'@'192.168.100.%';
-
--- 撤销所有权限但不删除账号
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'reader'@'192.168.100.%';
-```
-
-#### 账号生命周期管理
-
-```sql
--- 查看所有账号
-SELECT user, host, account_locked, password_expired, password_lifetime
-FROM mysql.user
-WHERE plugin != 'auth_socket'
-ORDER BY user;
-
--- 锁定账号
-ALTER USER 'developer'@'192.168.100.%' ACCOUNT LOCK;
-
--- 解锁账号
-ALTER USER 'developer'@'192.168.100.%' ACCOUNT UNLOCK;
-
--- 设置密码过期
-ALTER USER 'writer'@'192.168.100.%' PASSWORD EXPIRE;
-
--- 删除账号
-DROP USER 'reader'@'192.168.100.%';
-```
-
-#### 资源限制
-
-```sql
-CREATE USER 'limited_app'@'192.168.100.%' IDENTIFIED BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE ON employees.* TO 'limited_app'@'192.168.100.%'
-WITH MAX_QUERIES_PER_HOUR 1000
-     MAX_UPDATES_PER_HOUR 100
-     MAX_CONNECTIONS_PER_HOUR 50
-     MAX_USER_CONNECTIONS 5;
-```
-
-<aside>
-💬
-
-**资源限制适合什么场景**
-
-- 面向外部系统的 API 账号
-- 第三方合作伙伴的只读账号
-- 测试环境中的公共账号
-
-</aside>
-
-### 2.5 MySQL 安全加固清单
-
-| 加固措施 | 命令 / 操作 | 防御什么 |
-| --- | --- | --- |
-| 禁止 root 远程登录 | `mysql_secure_installation` | 远程暴力破解 |
-| 限制账号来源 IP | `'user'@'192.168.100.%'` | 未知网络连接 |
-| 启用密码验证组件 | `INSTALL COMPONENT 'file://component_validate_password'` | 弱密码 |
-| 定期轮换密码 | `ALTER USER ... IDENTIFIED BY ...` | 密码泄露后的窗口期 |
-| 锁定不用的账号 | `ALTER USER ... ACCOUNT LOCK` | 废弃账号被利用 |
-| 最小权限原则 | 只授予业务所需权限 | 权限滥用 / 提权 |
-| 删除匿名用户 | `DROP USER ''@'localhost'` | 匿名访问 |
-| 删除 test 数据库 | `DROP DATABASE test` | 测试库被利用 |
-| 限制 FILE 权限 | 不授予业务账号 FILE 权限 | 读写服务器文件系统 |
-| 开启 binlog | 项目五已配置 | 数据恢复 / 审计追溯 |
 
 <aside>
 ✅
 
 **第 2 课小结**
 
-- 权限管理主线是查、改、锁、删
-- 多角色账号应遵循最小权限原则
-- 资源限制可用于防止账号滥用
-- 安全加固需要定期审计，不是一劳永逸
+- SQL 注入：理解原理，掌握通过审计日志和 performance_schema 检测
+- 暴力破解：掌握 `FAILED_LOGIN_ATTEMPTS` 账户锁定策略
+- UDF 提权：掌握检测（查 mysql.func、查 FILE 权限）和清理方法
+- 入侵响应：隔离 → 保全 → 排查 → 止损 → 恢复 → 加固 → 复盘
 
 </aside>
 
 ---
 
-## 第 3 课 命令行备份与还原：丢不了数据
+## 第 3 课：数据脱敏与加密——保护敏感数据
 
-### 3.1 本课要解决的问题
+### 3.1 为什么需要脱敏和加密？
 
-- 掌握 `mysqldump` 的常用备份语法
-- 掌握备份还原的完整流程
-- 理解逻辑备份的适用场景和局限性
-- 能写出简单的定时备份脚本
+项目五中你学会了用权限控制"谁能访问"数据，但有些场景权限控制不够：
 
-### 3.2 为什么还要学命令行备份
+- **开发/测试环境**需要用真实数据量测试，但不能看到真实敏感信息
+- **合规要求**（如等保、GDPR）要求敏感数据必须加密存储
+- **数据泄露兜底**：即使数据库被拖库，加密后的数据也无法直接使用
 
-Navicat 备份适合图形化操作，但服务器生产环境更常见的是脚本化、自动化备份。因此，命令行备份是必学技能。
+### 3.2 数据脱敏：让测试数据安全可用
 
-<aside>
-💬
+**脱敏原则**：保持数据格式和统计特征，替换敏感内容。
 
-**备份方式对比**
+| 数据类型 | 原始值 | 脱敏后 | 脱敏方式 |
+| --- | --- | --- | --- |
+| 手机号 | 13812345678 | 138****5678 | 保留前3后4 |
+| 身份证 | 110101199001011234 | 110101****1234 | 保留前6后4 |
+| 姓名 | 张三丰 | 张** | 保留姓 |
+| 邮箱 | user@example.com | u***@example.com | 保留首字母和域名 |
+| 银行卡 | 6222021234567890 | 6222********7890 | 保留前4后4 |
+| 密码哈希 | $2b$12$xxx... | $2b$12$随机值 | 重新生成 |
 
-| 方式 | 适合场景 | 是否需要 GUI |
+**实操：MySQL 视图脱敏**
+
+```sql
+-- 假设有一个用户表（项目五中你可能创建过类似的表）
+CREATE TABLE IF NOT EXISTS employees (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(50),
+  phone VARCHAR(20),
+  id_card VARCHAR(20),
+  salary DECIMAL(10,2),
+  department VARCHAR(50)
+);
+
+-- 创建脱敏视图（开发/测试环境使用）
+CREATE VIEW v_employees_masked AS
+SELECT
+  id,
+  CONCAT(LEFT(name, 1), '**') AS name,
+  CONCAT(LEFT(phone, 3), '****', RIGHT(phone, 4)) AS phone,
+  CONCAT(LEFT(id_card, 6), '****', RIGHT(id_card, 4)) AS id_card,
+  salary,  -- 薪资视需求决定是否脱敏
+  department
+FROM employees;
+
+-- 对比
+SELECT * FROM employees WHERE id = 1;
+-- | 1 | 张三丰 | 13812345678 | 110101199001011234 | 15000.00 | 技术部 |
+
+SELECT * FROM v_employees_masked WHERE id = 1;
+-- | 1 | 张** | 138****5678 | 110101****1234 | 15000.00 | 技术部 |
+```
+
+**实操：数据导出时脱敏**
+
+```bash
+# 导出脱敏后的数据到新表，供测试环境使用
+mysqldump -u root -p testdb employees \
+  --no-create-info \
+  --skip-add-locks \
+  --where="1=1" | \
+  sed "s/[0-9]\{11\}/&/g" > /tmp/masked_data.sql
+# 实际生产中建议用脚本程序做更精确的脱敏
+```
+
+### 3.3 透明数据加密（TDE）：存储层加密
+
+**TDE 原理**：数据在写入磁盘前自动加密，读取时自动解密。应用层无感知，但磁盘文件是加密的。
+
+| 对比项 | 无 TDE | 有 TDE |
 | --- | --- | --- |
-| Navicat 备份模块 | 本地快速备份、开发环境 | 需要 |
-| mysqldump | 服务器自动化备份、生产环境 | 不需要 |
-| 物理备份（XtraBackup） | 大数据量、热备份 | 不需要 |
+| 磁盘文件 | 明文存储 | 加密存储 |
+| 应用改动 | — | 无需改动 |
+| 拖库风险 | 拿走磁盘文件即泄露 | 文件无法直接读取 |
+| 性能影响 | 无 | 约 5%~15% |
 
-</aside>
+**实操：MySQL 8.0 开启 TDE**
 
-### 3.3 mysqldump 备份详解
+```sql
+-- 1. 查看当前加密状态
+SELECT * FROM performance_schema.file_summary_by_instance
+  WHERE FILE_NAME LIKE '%ibd%' LIMIT 5;
 
-```bash
-# 单库备份
-mysqldump -u root -p stusta > stusta_backup.sql
+-- 2. 创建加密密钥
+-- MySQL 8.0 使用 keyring 插件管理密钥
+-- 先安装 keyring 插件（需在 my.cnf 中配置）
+-- my.cnf 添加：
+-- [mysqld]
+-- early-plugin-load=keyring_file.so
+-- keyring_file_data=/var/lib/mysql-keyring/keyring
 
-# 带时间戳的备份
-mysqldump -u root -p stusta > stusta_$(date +%Y%m%d_%H%M%S).sql
+-- 3. 重启 MySQL 后，创建加密表空间
+CREATE TABLESPACE encrypted_ts
+  ADD DATAFILE 'encrypted_ts.ibd'
+  ENCRYPTION = 'Y';
 
-# 多库备份
-mysqldump -u root -p --databases stusta employees > multi_db_backup.sql
+-- 4. 在加密表空间中创建表
+CREATE TABLE sensitive_data (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  credit_card VARCHAR(50),
+  secret_key VARCHAR(100)
+) TABLESPACE = encrypted_ts ENCRYPTION = 'Y';
 
-# 全库备份
-mysqldump -u root -p --all-databases > all_db_backup.sql
+-- 5. 也可以直接对已有表开启加密
+ALTER TABLE employees ENCRYPTION = 'Y';
+
+-- 6. 验证加密状态
+SELECT TABLE_SCHEMA, TABLE_NAME, ENCRYPTION
+  FROM INFORMATION_SCHEMA.TABLES
+  WHERE ENCRYPTION = 'YES';
 ```
 
-#### 常用参数
+### 3.4 连接加密：SSL/TLS
 
-| 参数 | 作用 | 推荐使用 |
-| --- | --- | --- |
-| `--single-transaction` | InnoDB 一致性备份，不锁表 | 必加 |
-| `--routines` | 包含存储过程和函数 | 建议加 |
-| `--triggers` | 包含触发器 | 默认已包含 |
-| `--events` | 包含定时事件 | 有事件时加 |
-| `--flush-logs` | 备份前切换 binlog | PITR 使用 |
-| `--source-data=2` | 记录 binlog 位置（8.0.22+ 替代 `--master-data`） | 主从复制使用 |
+项目五中你用 Navicat 连接数据库时，数据是明文传输的。在生产环境中，必须加密传输通道。
 
-<aside>
-💬
+```sql
+-- 检查当前 SSL 状态
+SHOW VARIABLES LIKE '%ssl%';
 
-**为什么 InnoDB 备份建议加 `--single-transaction`**
-
-它会开启快照事务，在不锁表的情况下获得一致性数据，适合业务在线运行时备份。
-
-</aside>
-
-#### 推荐的备份命令
-
-```bash
-mysqldump -u root -p \
-  --single-transaction \
-  --routines \
-  --triggers \
-  --events \
-  --flush-logs \
-  stusta > stusta_daily_$(date +%Y%m%d).sql
+-- 查看当前连接是否使用 SSL
+SELECT user, host, ssl_type, ssl_cipher
+  FROM performance_schema.threads
+  WHERE type = 'FOREGROUND';
 ```
 
-### 3.4 备份还原
+**强制特定用户必须使用 SSL 连接**：
 
-#### 还原整个数据库
+```sql
+-- 项目五中创建的用户，现在强制 SSL
+ALTER USER 'app_user'@'10.0.%' REQUIRE SSL;
 
-```bash
-mysql -u root -p stusta < stusta_backup.sql
+-- 更严格：要求客户端提供证书
+ALTER USER 'admin'@'10.0.%' REQUIRE X509;
 
-mysql -u root -p
-> SOURCE /path/to/stusta_backup.sql;
+-- 验证
+SHOW GRANTS FOR 'app_user'@'10.0.%';
+-- 输出中会包含: REQUIRE SSL
 ```
-
-#### 还原到新数据库
-
-```bash
-mysql -u root -p -e "CREATE DATABASE stusta_restored;"
-mysql -u root -p stusta_restored < stusta_backup.sql
-```
-
-<aside>
-💬
-
-**还原前注意事项**
-
-1. 如果 `.sql` 文件包含 `CREATE DATABASE` 和 `USE`，会直接作用于同名数据库
-2. 如果只导出单库结构，则需要先手动创建目标数据库
-3. 大文件还原时，可能需要调整 `max_allowed_packet`
-
-</aside>
-
-### 3.5 逻辑备份 vs 物理备份
-
-| 维度 | 逻辑备份（mysqldump） | 物理备份（XtraBackup） |
-| --- | --- | --- |
-| 输出格式 | SQL 文本文件 | 数据文件的二进制副本 |
-| 备份速度 | 慢 | 快 |
-| 还原速度 | 慢 | 快 |
-| 可读性 | 可读 | 不可读 |
-| 跨版本 | 支持 | 不支持 |
-| 适用规模 | 中小型 | 大型 |
-| 热备份 | 支持 | 支持 |
-
-<aside>
-💬
-
-**初学者用 mysqldump 就够了**
-
-课程阶段重点掌握逻辑备份的流程，等数据量增长到更大规模后，再考虑物理备份方案。
-
-</aside>
-
-### 3.6 自动化备份脚本
-
-```bash
-#!/bin/bash
-# /opt/mysql_backup.sh — MySQL 每日备份脚本
-
-BACKUP_DIR="/var/backups/mysql"
-DATE=$(date +%Y%m%d_%H%M%S)
-DB_NAME="stusta"
-KEEP_DAYS=7
-
-mkdir -p "$BACKUP_DIR"
-
-# 方式一：交互输入密码（课堂演示更安全）
-mysqldump -u root -p \
-  --single-transaction \
-  --routines \
-  --triggers \
-  --events \
-  --flush-logs \
-  "$DB_NAME" > "$BACKUP_DIR/${DB_NAME}_${DATE}.sql"
-
-# 方式二：生产脚本使用 --defaults-extra-file 指定凭证文件
-# mysqldump --defaults-extra-file=/root/.my.cnf \
-#   --single-transaction \
-#   --routines \
-#   --triggers \
-#   --events \
-#   --flush-logs \
-#   "$DB_NAME" > "$BACKUP_DIR/${DB_NAME}_${DATE}.sql"
-
-if [ $? -eq 0 ]; then
-    echo "[$(date)] Backup OK: ${DB_NAME}_${DATE}.sql" >> "$BACKUP_DIR/backup.log"
-else
-    echo "[$(date)] Backup FAILED!" >> "$BACKUP_DIR/backup.log"
-fi
-
-find "$BACKUP_DIR" -name "*.sql" -mtime +$KEEP_DAYS -delete
-```
-
-设置定时执行：
-
-```bash
-chmod +x /opt/mysql_backup.sh
-sudo crontab -e
-# 每天凌晨 2 点执行
-0 2 * * * /opt/mysql_backup.sh
-```
-
-<aside>
-⚠️
-
-**脚本中的密码安全**
-
-生产环境建议使用 `~/.my.cnf` 或 `--defaults-extra-file` 保存凭证，并确保文件权限为 600。
-
-</aside>
 
 <aside>
 ✅
 
 **第 3 课小结**
 
-- `mysqldump` 是 MySQL 最基础的备份工具
-- InnoDB 备份推荐加 `--single-transaction`
-- 还原前要确认目标库状态，避免误覆盖
-- 生产环境用 cron + 脚本实现自动备份
+- 数据脱敏：视图脱敏让测试环境安全可用，脱敏原则是保留格式替换内容
+- TDE 加密：磁盘层加密，拖库也无法读取，性能影响约 5%~15%
+- 连接加密：SSL/TLS 加密传输，可强制特定用户必须使用 SSL
+- 三层防护体系：权限控制（项目五）+ 脱敏 + 加密 = 纵深防御
 
 </aside>
 
 ---
 
-## 第 4 课 主从复制与攻防加固：扩得了容、防得住攻击
+## 第 4 课：高级备份与恢复——从"能备份"到"不丢数据"
 
-### 4.1 本课要解决的问题
+### 4.1 项目五回顾与局限
 
-- 理解 MySQL 主从复制的原理
-- 能配置基于 binlog 的主从复制
-- 了解常见的 MySQL 攻击方式和对应防御措施
-- 了解 GTID 复制和 MySQL 高可用方案
+项目五中你学会了用 `mysqldump` 做全量备份和还原。但全量备份有一个致命问题：
 
-### 4.2 主从复制原理
+**场景**：每天凌晨 2:00 做一次全量备份，周三上午 10:00 误删了一张表。
 
-MySQL 复制是将主服务器的数据变更同步到一个或多个从服务器的技术。
+- 如果只做全量备份 → 恢复到周二凌晨 2:00 → **丢失 8 小时数据**
+- 如果做了全量 + binlog → 恢复到周三 9:59:59 → **只丢失 1 秒数据**
 
-**复制流程图**：
+| 策略 | RPO（最大丢失量） | 存储成本 | 恢复复杂度 |
+| --- | --- | --- | --- |
+| 仅全量备份（项目五） | 最大 24 小时 | 低 | 简单 |
+| 全量 + 增量备份 | 最大 24 小时 | 中 | 中等 |
+| 全量 + binlog（PITR） | 接近 0 | 中 | 较高 |
+| 全量 + 增量 + binlog | 接近 0 | 较高 | 高 |
 
-```text
-主服务器                      从服务器
-写操作 → binlog  → 网络传输 → IO Thread → Relay Log → SQL Thread → 数据更新
+> **RPO**（Recovery Point Objective）：恢复点目标，即允许丢失的最大数据量。
+
+### 4.2 实操：增量备份（基于 mysqldump）
+
+增量备份不是 MySQL 原生支持的概念，但可以通过 `--flush-logs` 切换 binlog 实现：
+
+```bash
+# 周日：全量备份 + 刷新 binlog
+mysqldump -u root -p --single-transaction \
+  --flush-logs --source-data=2 \
+  --all-databases > /backup/full_sun.sql
+
+# 周一至周六：只需要备份新的 binlog 文件
+# --flush-logs 会在备份后生成新的 binlog 文件
+# 之后每天备份自上次 flush 以来新生成的 binlog 即可
+mysqladmin -u root -p flush-logs
+cp /var/lib/mysql/mysql-bin.* /backup/binlog/
 ```
 
-| 线程 | 所在 | 作用 |
-| --- | --- | --- |
-| Binlog Dump Thread | 主服务器 | 读取 binlog 并发送给从服务器 |
-| IO Thread | 从服务器 | 接收 binlog 并写入 Relay Log |
-| SQL Thread | 从服务器 | 读取 Relay Log 并执行 SQL |
+### 4.3 实操：基于 binlog 的时间点恢复（PITR）
 
-<aside>
-💬
+这是**生产环境必须掌握**的恢复能力。
 
-**类比理解**
+**场景**：周三上午 10:05:00 有人误执行了 `DROP TABLE employees`，需要恢复到 10:04:59。
 
-主库像“老师”，把写操作记在流水账里；从库像“学生”，先抄写流水账，再按账本内容执行。
+**步骤一：恢复最近的全量备份**
 
-</aside>
+```bash
+mysql -u root -p < /backup/full_sun.sql
+```
 
-### 复制的应用场景
+**步骤二：用 binlog 重放到误操作之前**
 
-| 场景 | 说明 |
+```bash
+# 1. 确定全量备份时的 binlog 位置
+head -50 /backup/full_sun.sql | grep "CHANGE MASTER"
+# 输出：CHANGE MASTER TO MASTER_LOG_FILE='mysql-bin.000015', MASTER_LOG_POS=154;
+
+# 2. 查看所有 binlog 文件
+ls -la /var/lib/mysql/mysql-bin.*
+
+# 3. 用 mysqlbinlog 重放 binlog，截止到误操作前
+# 方法一：按时间截止
+mysqlbinlog --start-position=154 \
+  --stop-datetime="2025-01-15 10:04:59" \
+  /var/lib/mysql/mysql-bin.000015 \
+  /var/lib/mysql/mysql-bin.000016 | mysql -u root -p
+
+# 方法二：按位置截止（更精确）
+# 先查看 binlog 找到 DROP TABLE 的位置
+mysqlbinlog /var/lib/mysql/mysql-bin.000016 | grep -n "DROP TABLE"
+# 假设发现 DROP TABLE 在 position 3456
+
+mysqlbinlog --start-position=154 \
+  --stop-position=3455 \
+  /var/lib/mysql/mysql-bin.000015 \
+  /var/lib/mysql/mysql-bin.000016 | mysql -u root -p
+```
+
+**关键 mysqlbinlog 参数**：
+
+| 参数 | 作用 |
 | --- | --- |
-| 读写分离 | 写操作发给主库，读操作发给从库 |
-| 数据备份 | 从库作为热备，主库故障时可快速切换 |
-| 数据分析 | 在从库执行耗时查询，不影响主库 |
-| 地理分布 | 在不同地区部署从库提供就近访问 |
+| `--start-datetime` | 从指定时间开始重放 |
+| `--stop-datetime` | 重放到指定时间停止 |
+| `--start-position` | 从指定 binlog 位置开始 |
+| `--stop-position` | 重放到指定位置停止 |
+| `--database=db` | 只重放指定数据库的操作 |
+| `--base64-output=DECODE-ROWS` | 以可读格式显示 ROW 模式的 binlog |
+| `-v` | 显示伪 SQL（将 ROW 事件还原为 SQL 语句） |
 
-### 4.3 主从复制配置思路
+### 4.4 实操：跳过误操作继续重放
 
-> **课堂环境说明**：当前课堂只有一台 Ubuntu 虚拟机，主从复制需要两台 MySQL 服务器。下面的配置步骤以 **Ubuntu 虚拟机作为主库** 为例演示主库端操作，从库端需在另一台 MySQL 服务器上执行（课下实验可使用 Docker 快速启动第二个实例）。
+如果误操作后面还有正常操作，需要跳过误操作继续重放：
 
-#### 主库配置
+```bash
+# 假设 binlog 内容：
+# position 154: 正常 INSERT
+# position 3456: 误操作 DROP TABLE  ← 跳过
+# position 3520: 正常 UPDATE        ← 继续
 
-```ini
-[mysqld]
-server-id = 1
-log_bin = /var/lib/mysql/mysql-bin
+# 分段重放
+mysqlbinlog --start-position=154 --stop-position=3455 \
+  /var/lib/mysql/mysql-bin.000016 | mysql -u root -p
+
+mysqlbinlog --start-position=3520 \
+  /var/lib/mysql/mysql-bin.000016 | mysql -u root -p
 ```
 
-> **注意**：MySQL 8.0 已移除 `binlog_format` 参数，默认使用 ROW 格式，无需手动指定。如配置文件中写了该参数，启动时会报警告，请直接删除。
+### 4.5 实操：XtraBackup 热备份（进阶）
 
-创建复制账号（若主库也安装了 `validate_password`，需先降低策略）：
+`mysqldump` 是逻辑备份（导出 SQL），`XtraBackup` 是物理备份（直接复制数据文件），速度更快，对大库更友好。
 
-```sql
--- 若 validate_password 已安装，先降低策略
-SET GLOBAL validate_password.policy = LOW;
-SET GLOBAL validate_password.length = 6;
+```bash
+# 安装 XtraBackup（Percona 提供）
+# Ubuntu/Debian
+apt install percona-xtrabackup-80
 
-CREATE USER IF NOT EXISTS 'repl'@'192.168.100.%' IDENTIFIED BY '123456';
-GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.168.100.%';
-SHOW BINARY LOG STATUS;
+# 全量备份（在线热备，不锁表）
+xtrabackup --backup --target-dir=/backup/full/ -u root -p
+
+# 准备备份（使备份一致）
+xtrabackup --prepare --target-dir=/backup/full/
+
+# 恢复备份（需要先停止 MySQL）
+systemctl stop mysql
+xtrabackup --copy-back --target-dir=/backup/full/
+chown -R mysql:mysql /var/lib/mysql
+systemctl start mysql
+
+# 增量备份
+xtrabackup --backup --target-dir=/backup/inc1/ \
+  --incremental-basedir=/backup/full/ -u root -p
+
+# 恢复增量备份
+xtrabackup --prepare --apply-log-only --target-dir=/backup/full/
+xtrabackup --prepare --target-dir=/backup/full/ \
+  --incremental-dir=/backup/inc1/
+xtrabackup --copy-back --target-dir=/backup/full/
 ```
 
-#### 从库配置
-
-```ini
-[mysqld]
-server-id = 2
-relay_log = /var/lib/mysql/relay-bin
-read_only = 1
-```
-
-配置连接主库：
-
-```sql
-CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST = '192.168.100.20',
-    SOURCE_USER = 'repl',
-    SOURCE_PASSWORD = '123456',
-    SOURCE_LOG_FILE = 'mysql-bin.000003',
-    SOURCE_LOG_POS = 154;
-
-START REPLICA;
-SHOW REPLICA STATUS\G
-```
-
-#### 验证复制状态
-
-确认 `Replica_IO_Running` 和 `Replica_SQL_Running` 都为 `Yes`，并且 `Seconds_Behind_Source` 接近 0。
-
-<aside>
-💬
-
-**术语兼容说明**：MySQL 8.0.22 以后推荐使用 Source / Replica 术语；旧资料中的 `MASTER` / `SLAVE` 命令仍常见，课程中优先使用新语法，遇到旧环境时再查对应旧命令。
-
-</aside>
-
-### 4.4 GTID 复制
-
-GTID 为每个事务分配全局唯一 ID，减少手动记录 File + Position 的麻烦。
-
-```ini
-# 主从均配置
-[mysqld]
-gtid_mode = ON
-enforce_gtid_consistency = ON
-```
-
-```sql
-CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST = '192.168.100.20',
-    SOURCE_USER = 'repl',
-    SOURCE_PASSWORD = '123456',
-    SOURCE_AUTO_POSITION = 1;
-
-START REPLICA;
-```
-
-<aside>
-💬
-
-**GTID 的价值**：更适合故障切换与自动化运维，MySQL 8.0 场景中推荐优先考虑。
-
-</aside>
-
-### 4.5 MySQL 常见攻击与防御
-
-### SQL 注入
-
-**防御措施**：参数化查询、输入验证、WAF、最小权限。
-
-### 弱密码暴力破解
-
-**防御措施**：强密码策略、限制来源 IP、账户锁定、禁用 root 远程登录。
-
-### 未授权访问
-
-**防御措施**：限制 `bind-address`、只开放内网访问、配合防火墙或安全组。
-
-### UDF 提权
-
-**防御措施**：不授予业务账号 `FILE` 权限，限制文件读写路径，定期审计。
-
-### 4.6 MySQL 高可用方案
-
-| 方案 | 原理 | 适用场景 |
+| 对比项 | mysqldump | XtraBackup |
 | --- | --- | --- |
-| InnoDB Cluster | 基于 Group Replication 的自动故障转移 | 官方推荐的高可用方案 |
-| PXC | 同步多主复制 | 强一致性要求场景 |
-| MHA | 自动主从切换 | 传统主从复制升级 |
-| ProxySQL / MySQL Router | 读写分离中间件 | 配合主从复制使用 |
+| 类型 | 逻辑备份（SQL） | 物理备份（数据文件） |
+| 锁表 | `--single-transaction` 不锁 InnoDB | 不锁表（热备） |
+| 速度 | 慢（需要执行 SQL） | 快（直接复制文件） |
+| 恢复方式 | `mysql < backup.sql` | `--copy-back` |
+| 增量支持 | 间接（通过 binlog） | 原生支持 |
+| 适用场景 | 小中型数据库 | 大型数据库 |
 
 <aside>
-💬
+💡
 
-**初学者掌握重点**
-
-当前阶段重点是理解主从复制和基本加固思路即可，高可用方案了解名称和用途就够了。
+**项目五衔接**：项目五第 3 课学的 `mysqldump` 是入门必备，现在你学会了 PITR 和 XtraBackup，从"能备份"升级到"不丢数据"。
 
 </aside>
 
@@ -830,49 +689,264 @@ START REPLICA;
 
 **第 4 课小结**
 
-- 能解释主从复制三个线程的作用
-- 能说出 GTID 与传统 File + Position 的差别
-- 能列出常见攻击与对应防御措施
-- 能理解主从复制、高可用和安全加固之间的关系
+- 理解 RPO 概念：全量备份 RPO 最大 24h，加 binlog 可接近 0
+- 掌握 PITR：全量恢复 + binlog 重放到误操作前
+- 掌握跳过误操作继续重放：分段 `--stop-position` / `--start-position`
+- 了解 XtraBackup：物理热备，大库首选
 
 </aside>
 
 ---
 
-## 📝 项目总结（一张表复盘）
+## 第 5 课：高可用架构与生产加固——让数据库"永远在线"
 
-| 课时 | 核心能力 | 验收点（可检查） |
+### 5.1 从项目五的主从复制到高可用
+
+项目五第 4 课你学会了主从复制的原理和配置，但主从复制本身**不是高可用**——主库挂了，从库不会自动切换。本课带你实现真正的**自动故障转移**。
+
+**从主从复制到高可用的演进路线**：
+
+```
+主从复制（项目五）         →    半同步复制（本项目）     →    自动故障转移（本项目）
+主库挂了=手动切            主库挂了=数据不丢           主库挂了=自动切、业务不停
+RPO可能丢数据              RPO=0                      RPO=0 + RTO<30秒
+```
+
+### 5.2 实操：半同步复制
+
+项目五用的是异步复制（主库不等从库确认），如果主库崩溃，从库可能没收到最后的变更。
+
+**半同步复制**：主库提交事务后，至少等待一个从库确认收到才返回成功。
+
+```sql
+-- 主库配置
+INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so';
+SET GLOBAL rpl_semi_sync_master_enabled = ON;
+SET GLOBAL rpl_semi_sync_master_timeout = 5000;  -- 等待从库5秒，超时降级为异步
+
+-- 从库配置
+INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so';
+SET GLOBAL rpl_semi_sync_slave_enabled = ON;
+
+-- 从库重启 IO 线程使半同步生效
+STOP SLAVE IO_THREAD;
+START SLAVE IO_THREAD;
+
+-- 主库验证
+SHOW STATUS LIKE 'Rpl_semi_sync_master_status';
+-- Value: ON 表示半同步正常
+
+SHOW STATUS LIKE 'Rpl_semi_sync_master_clients';
+-- Value: 1 表示有1个从库在半同步模式
+
+-- 查看超时降级情况
+SHOW STATUS LIKE 'Rpl_semi_sync_master_no_times';
+-- 如果此值不断增长，说明从库跟不上，频繁降级为异步
+```
+
+**半同步 vs 异步对比**：
+
+| 对比项 | 异步复制（项目五） | 半同步复制 |
 | --- | --- | --- |
-| 第 1 课：Navicat 管理 | 用得顺手 | 能连接、导入、导出、备份 |
-| 第 2 课：权限管理 | 管得住人 | 能创建多角色账号并验证权限边界 |
-| 第 3 课：命令行备份 | 丢不了数据 | 能用 mysqldump 完成备份还原并写定时脚本 |
-| 第 4 课：复制与加固 | 扩得了容、防得住攻击 | 能解释主从复制流程并说出常见攻击防御 |
+| 主库提交后 | 立即返回 | 等待至少1个从库确认 |
+| 主库崩溃时数据丢失 | 可能丢失 | 不丢失（已确认的） |
+| 性能影响 | 无 | 略有延迟（超时时间内） |
+| 降级机制 | — | 超时后自动降级为异步 |
+
+### 5.3 实操：MHA 自动主从切换
+
+MHA（Master High Availability）是最成熟的开源 MySQL 故障切换方案。
+
+**架构**：
+
+```
+              MHA Manager
+                  |
+    +-------------+-------------+
+    |             |             |
+  主库         从库1         从库2
+(Master)     (Slave1)      (Slave2)
+    |             |             |
+    +------复制-----+------复制-----+
+```
+
+**安装与配置**：
+
+```bash
+# 1. 所有节点安装 MHA Node
+apt install mha4mysql-node
+
+# 2. 管理节点安装 MHA Manager
+apt install mha4mysql-manager
+
+# 3. 配置 SSH 免密登录（所有节点之间）
+ssh-keygen -t rsa
+ssh-copy-id root@slave1
+ssh-copy-id root@slave2
+
+# 4. 创建 MHA 配置文件
+cat > /etc/mha/app1.cnf << 'EOF'
+[server default]
+manager_workdir=/var/log/mha/app1
+manager_log=/var/log/mha/app1/manager.log
+user=mha_monitor
+password=MhaMonitor123!
+repl_user=repl
+repl_password=Repl123!
+ssh_user=root
+
+[server1]
+hostname=192.168.1.10
+port=3306
+candidate_master=1
+
+[server2]
+hostname=192.168.1.11
+port=3306
+candidate_master=1
+
+[server3]
+hostname=192.168.1.12
+port=3306
+no_master=1
+EOF
+
+# 5. 检查配置
+masterha_check_ssh --conf=/etc/mha/app1.cnf
+masterha_check_repl --conf=/etc/mha/app1.cnf
+
+# 6. 启动 MHA Monitor
+nohup masterha_manager --conf=/etc/mha/app1.cnf &
+
+# 7. 模拟主库故障
+# 在主库上：systemctl stop mysql
+# MHA 会在 30 秒内自动将某个从库提升为新主库
+```
+
+**MHA 故障切换过程**：
+
+```
+1. 检测主库不可用（连续 ping 失败）
+2. 尝试从主库保存 binlog（如果 SSH 可达）
+3. 从最新的从库中找出 relaylog 最完整的
+4. 将差异 relaylog 应用到其他从库
+5. 提升最完整的从库为新主库
+6. 其他从库指向新主库
+7. 发送故障通知
+```
+
+### 5.4 生产环境加固 Checklist
+
+结合项目五和项目六所有知识，整理一份完整的生产加固 Checklist：
+
+#### 网络层
+
+| 检查项 | 加固措施 | 验证命令 |
+| --- | --- | --- |
+| 监听地址 | 只监听内网 | `SHOW VARIABLES LIKE 'bind_address'` |
+| 防火墙 | 只开放必要 IP | `iptables -L -n \| grep 3306` |
+| SSL 连接 | 强制 SSL | `SHOW VARIABLES LIKE 'require_secure_transport'` |
+
+#### 账户层
+
+| 检查项 | 加固措施 | 验证命令 |
+| --- | --- | --- |
+| root 远程登录 | 禁止 root 远程 | `SELECT * FROM mysql.user WHERE user='root' AND host!='localhost'` |
+| 匿名账号 | 删除匿名用户 | `SELECT * FROM mysql.user WHERE user=''` |
+| 空密码 | 禁止空密码 | `SELECT user,host FROM mysql.user WHERE authentication_string=''` |
+| 密码策略 | 启用 validate_password | `SHOW VARIABLES LIKE 'validate_password%'` |
+| 账户锁定 | 配置失败锁定 | `SELECT user,host,FAILED_LOGIN_ATTEMPTS FROM mysql.user` |
+| 闲置账号 | 定期清理 | `SELECT user,host,password_last_changed FROM mysql.user` |
+| 权限最小化 | 按需授权 | `SELECT * FROM mysql.user WHERE Super_priv='Y'` |
+| FILE 权限 | 严格控制 | `SELECT user,host FROM mysql.user WHERE File_priv='Y'` |
+
+#### 数据层
+
+| 检查项 | 加固措施 | 验证命令 |
+| --- | --- | --- |
+| 敏感数据加密 | TDE 加密表 | `SELECT TABLE_NAME,ENCRYPTION FROM INFORMATION_SCHEMA.TABLES WHERE ENCRYPTION='YES'` |
+| 测试数据脱敏 | 视图脱敏 | 检查脱敏视图是否存在 |
+| 审计日志 | 开启审计插件 | `SHOW VARIABLES LIKE 'server_audit%'` |
+
+#### 备份层
+
+| 检查项 | 加固措施 | 验证命令 |
+| --- | --- | --- |
+| 定期全量备份 | 每日全量 | 检查 crontab 和备份文件 |
+| binlog 保留 | 保留 7 天以上 | `SHOW VARIABLES LIKE 'binlog_expire_logs_seconds'` |
+| 备份验证 | 定期恢复测试 | 在测试环境恢复验证 |
+| 异地备份 | 备份文件传异地 | 检查同步脚本 |
+
+#### 高可用层
+
+| 检查项 | 加固措施 | 验证命令 |
+| --- | --- | --- |
+| 复制模式 | 半同步复制 | `SHOW STATUS LIKE 'Rpl_semi_sync%'` |
+| 故障切换 | MHA 或 InnoDB Cluster | `masterha_check_status --conf=/etc/mha/app1.cnf` |
+| 监控告警 | 复制延迟告警 | `SHOW SLAVE STATUS` 的 Seconds_Behind_Master |
+
+<aside>
+✅
+
+**第 5 课小结**
+
+- 从主从复制（项目五）→ 半同步复制 → 自动故障转移，实现真正高可用
+- 半同步复制确保已提交事务不丢失，超时自动降级
+- MHA 实现主库故障后自动切换，RTO < 30 秒
+- 生产加固 Checklist 覆盖网络、账户、数据、备份、高可用五大层面
+
+</aside>
+
+---
+
+## 📝 项目总结（与项目五对比复盘）
+
+| 能力维度 | 项目五（基础安全维护） | 项目六（高级安全维护） |
+| --- | --- | --- |
+| **审计** | 用 `SHOW GRANTS` 看权限 | 用审计日志追踪"谁做了什么" |
+| **防注入** | 未涉及 | 检测 SQL 注入、分析攻击模式 |
+| **防暴力破解** | 设强密码 | 账户锁定策略 + 密码复杂度策略 |
+| **UDF 提权** | 知道要限制 FILE 权限 | 能检测是否已被提权、能清理 |
+| **数据保护** | 权限控制"谁能访问" | 脱敏 + TDE + SSL 纵深防御 |
+| **备份恢复** | mysqldump 全量备份还原 | PITR 时间点恢复 + XtraBackup 热备 |
+| **高可用** | 主从复制（手动切） | 半同步复制 + MHA 自动切换 |
+| **加固** | 知道基本措施 | 完整 Checklist 五大层面 |
 
 ---
 
 ## 附录
 
-### 附录 A：Navicat 常用快捷键
+### 附录 A：审计日志关键字段速查
 
-| 操作 | 快捷键 |
+| 字段 | 含义 | 排查场景 |
+| --- | --- | --- |
+| 时间戳 | 操作发生时间 | 查找非工作时间操作 |
+| 用户名 | 执行账号 | 确认操作者身份 |
+| 来源 IP | 客户端地址 | 检测异常来源 |
+| 命令类型 | Query/Connect/Quit | 过滤关注的事件类型 |
+| SQL 内容 | 完整语句 | 搜索危险操作（DROP/DELETE/GRANT） |
+| 返回码 | 0=成功 | 过滤失败操作 |
+
+### 附录 B：PITR 恢复流程速查
+
+```
+1. 停止应用写入
+2. 恢复最近全量备份: mysql < full_backup.sql
+3. 找到全量备份的 binlog 位置
+4. 查找误操作位置: mysqlbinlog binlog_file | grep -n "危险SQL"
+5. 重放 binlog 到误操作前: mysqlbinlog --stop-position=XXX | mysql
+6. 跳过误操作，继续重放: mysqlbinlog --start-position=YYY | mysql
+7. 验证数据完整性
+8. 恢复应用写入
+```
+
+### 附录 C：MHA 常用命令速查
+
+| 命令 | 用途 |
 | --- | --- |
-| 新建查询 | `Ctrl + Q` |
-| 执行查询 | `Ctrl + R` |
-| 注释/取消注释 | `Ctrl + /` |
-| 切换数据库 | `Ctrl + D` |
-| 刷新对象列表 | `F5` |
-
-### 附录 B：mysqldump 常用参数速查
-
-| 参数 | 作用 |
-| --- | --- |
-| `--single-transaction` | InnoDB 一致性不锁表备份 |
-| `--databases db1 db2` | 指定备份的数据库 |
-| `--all-databases` | 备份所有数据库 |
-| `--routines` | 包含存储过程和函数 |
-| `--triggers` | 包含触发器 |
-| `--events` | 包含定时事件 |
-| `--flush-logs` | 备份前切换 binlog |
-| `--source-data=2` | 记录 binlog 位置（8.0.22+ 替代 `--master-data`） |
-| `--where="条件"` | 只备份符合条件的数据 |
-| `--no-data` | 只备份表结构，不备份数据 |
+| `masterha_check_ssh` | 检查 SSH 连通性 |
+| `masterha_check_repl` | 检查复制状态 |
+| `masterha_manager` | 启动 MHA 监控 |
+| `masterha_check_status` | 查看监控状态 |
+| `masterha_master_switch` | 手动切换主库 |
+| `masterha_conf_host` | 修改配置 |
