@@ -714,7 +714,7 @@ ALTER USER 'app'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '12345
 
 **① 确认能看到授权的数据库**
 
-在左侧数据库列表中，应该能看到 `stusta`，但**不应该**看到 `mysql`、`information_schema` 等系统库。
+在左侧数据库列表中，应该能看到 `stusta`，但**不应该**看到 `mysql`等系统库。
 
 **② 验证查询操作（应成功）**
 
