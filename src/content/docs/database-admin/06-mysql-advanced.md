@@ -6,15 +6,16 @@ title: "06.项目六 MySQL数据库高级安全维护"
 
 🎯 **本项目学习目标**
 
-- 能结合命令行和 Navicat 完成权限精细化管理和资源限制配置
-- 能理解 MySQL 账号生命周期管理（创建、授权、锁定、过期、删除）
-- 能识别常见攻击面，并给出对应的安全加固措施
-- 能理解 MySQL 高可用方案的基本原理
+- 能使用 Navicat 图形化完成数据库、数据表、字段、索引和外键的日常管理
+- 能使用 Navicat 管理用户权限，并与命令行 `GRANT` / `REVOKE` 结果相互验证
+- 能使用 Navicat 完成数据导入导出、备份还原、结构同步和数据维护
+- 能通过 Navicat 监控连接、进程、服务器变量和日志相关状态
+- 能基于项目五的安全基础，形成数据库日常维护与安全加固清单
 
 <aside>
 🧭
 
-**主线地图**：权限精细化 → 密码策略与账号生命周期 → 安全加固 → 高可用方案。
+**主线地图**：图形化建库建表 → 图形化管用户权限 → 图形化备份维护 → 监控排错 → 安全加固与高可用认知。
 
 </aside>
 
@@ -23,825 +24,973 @@ title: "06.项目六 MySQL数据库高级安全维护"
 
 **前置条件**
 
-- 已完成项目五：MySQL 已安装，Navicat 能远程连接，binlog 已开启
-- 已有数据库 `stusta` 和 `employees`，账号 `app@192.168.100.%`
+- 已完成项目五：Ubuntu 虚拟机中的 MySQL 已安装并能运行
+- 宿主机 Windows 已安装 Navicat，并能连接虚拟机 MySQL
+- 已有 `root@localhost` 管理员账号，课堂密码统一为 `123456`
+- 已理解项目五中的最小权限、日志、binlog 和账号来源主机概念
 
 **课堂产出**
 
-- 能创建多角色账号并验证权限边界
-- 能管理账号的锁定、过期、资源限制
-- 能列出常见攻击与对应防御措施
-- 能理解高可用方案与主从复制的关系
+- 能用 Navicat 创建 `employees_lab` 数据库、数据表、索引和外键
+- 能用 Navicat 创建只读、读写、开发三类账号，并验证权限边界
+- 能完成一次表数据导入导出、一次 SQL 转储备份、一次还原验证
+- 能查看服务器进程、变量、状态和日志路径，完成基础维护检查
 
 </aside>
 
 ---
 
-## 第 1 课 权限精细化管理：管得住人
+## 第 1 课 Navicat 连接与界面认知：从命令行走向图形化管理
 
 ### 1.1 本课要解决的问题
 
-> 项目五中，我们用 `app` 账号做了所有操作——建库建表、读写数据、导入导出。但在真实场景中，一个账号干所有事，安全吗？
+项目五已经解决了 MySQL “能装、能连、能授权、能看日志”。本项目进一步解决：**如何像数据库管理员一样，用图形化工具完成日常管理与维护**。
 
-- 能在 Navicat 中管理用户权限
-- 能用命令行完成完整的权限管理流程
-- 能理解权限排查的基本思路
+本课重点不是替代命令行，而是建立对应关系：
 
-### 1.2 为什么需要多角色账号？
-
-#### 场景分析
-
-假设你是一家互联网公司的 DBA，公司有一套 `employees` 员工管理系统数据库。现在有四类人需要访问这个数据库：
-
-| 角色 | 他是谁 | 他要做什么 | 他不应该做什么 |
-| --- | --- | --- | --- |
-| **数据分析师** | 运营/财务人员，用 BI 工具出报表 | 查询员工数据 | 修改、删除数据 |
-| **应用系统** | 后端程序，通过代码读写数据库 | 增删改查员工数据 | 建表、删表、改结构 |
-| **开发者** | 开发人员，需要调试和建新功能 | 读写数据 + 修改表结构 | 删库、管理其他账号 |
-| **DBA（你）** | 数据库管理员 | 所有操作 | — |
-
-> **核心问题**：如果给所有人都是 `app` 账号（全权限），会出现什么问题？
->
-> 1. 数据分析师误操作 `DELETE`，数据没了
-> 2. 开发者不小心 `DROP TABLE`，业务中断
-> 3. 应用系统被黑客注入后，可以 `DROP DATABASE`
->
-> **结论**：每个角色必须只能做他该做的事——**最小权限原则**。
-
-### 1.3 权限验证流程
-
-客户端发起连接后，MySQL 先做身份验证，再做权限验证：
-
-```text
-连接请求
-  ↓
-认证：用户名 + 主机 + 密码
-  ↓
-授权：全局 → 数据库 → 表 → 列
-  ↓
-允许或拒绝操作
-```
+| 命令行操作 | Navicat 中的位置 | 用途 |
+| --- | --- | --- |
+| `SHOW DATABASES;` | 左侧连接树 | 查看数据库列表 |
+| `CREATE DATABASE ...` | 右键连接 → 新建数据库 | 创建业务库 |
+| `CREATE TABLE ...` | 右键表 → 新建表 | 设计表结构 |
+| `GRANT ...` | 用户管理 / 权限页 | 授权 |
+| `SHOW PROCESSLIST;` | 工具 → 服务器监控 / 进程列表 | 查看连接与执行中的 SQL |
+| `mysqldump` | 转储 SQL 文件 / 运行 SQL 文件 | 备份与还原 |
 
 <aside>
 💬
 
-**排查权限问题的顺序**
-
-1. 看当前连接身份：`SELECT USER(), CURRENT_USER();`
-2. 看账号拥有哪些权限：`SHOW GRANTS;`
-3. 看账号是否被锁定：`SELECT user, host, account_locked FROM mysql.user;`
-4. 看密码是否过期：`SELECT user, host, password_expired FROM mysql.user;`
+**一句话理解**：Navicat 是“可视化操作台”，MySQL Server 仍然在虚拟机里运行。界面上点的每一步，底层最终都会变成 SQL 或 MySQL 协议操作。
 
 </aside>
 
-### 1.4 权限存储表
+### 1.2 新建和测试连接
 
-| 表名 | 存储内容 | 查看方式 |
+在宿主机 Windows 打开 Navicat：
+
+1. 点击 **连接** → **MySQL**
+2. 填写连接信息：
+
+| 配置项 | 示例值 | 说明 |
 | --- | --- | --- |
-| `mysql.user` | 全局权限 + 账号信息 | `SELECT * FROM mysql.user WHERE user='app'\G` |
-| `mysql.db` | 数据库级权限 | `SELECT * FROM mysql.db WHERE user='app'\G` |
-| `mysql.tables_priv` | 表级权限 | `SELECT * FROM mysql.tables_priv WHERE user='app'\G` |
-| `mysql.columns_priv` | 列级权限 | `SELECT * FROM mysql.columns_priv WHERE user='app'\G` |
+| 连接名 | `MySQL-Ubuntu-Root` | 自定义名称 |
+| 主机 | `192.168.100.20` | Ubuntu 虚拟机 IP |
+| 端口 | `3306` | MySQL 默认端口 |
+| 用户名 | `root` 或项目五创建的管理账号 | 管理操作建议使用管理员账号 |
+| 密码 | `123456` | 课堂统一密码 |
 
-### 1.5 权限速查表
-
-| 分类 | 权限 | 说明 | 常见场景 |
-| --- | --- | --- | --- |
-| **数据操作** | `SELECT` | 读取数据 | 只读报表账号 |
-| | `INSERT` | 插入数据 | 应用写入 |
-| | `UPDATE` | 修改数据 | 应用更新 |
-| | `DELETE` | 删除数据 | 应用删除 |
-| **结构管理** | `CREATE` | 创建数据库/表 | 开发者 |
-| | `ALTER` | 修改表结构 | 开发者 |
-| | `DROP` | 删除数据库/表 | **生产环境慎给** |
-| | `INDEX` | 创建/删除索引 | 性能优化 |
-| **管理权限** | `GRANT OPTION` | 允许该用户授权给别人 | 仅限管理员 |
-| | `SUPER` | 管理服务器级操作 | 仅限 DBA |
-| | `PROCESS` | 查看所有连接 | 排查问题 |
-| | `FILE` | 读写服务器文件 | **高危，不建议给** |
+3. 点击 **测试连接**
+4. 成功后点击 **确定** 保存
 
 <aside>
 ⚠️
 
-**高危权限黑名单**：以下权限在教学环境可以了解，但**生产环境绝不应该授予业务账号**：
+**如果 root 不能远程登录，这是正常的安全设计。** 项目五中建议禁止 root 远程登录。课堂中更推荐创建一个专门的管理员账号，例如：
 
-- `SUPER`：可以修改全局变量、杀死任何连接
-- `FILE`：可以读写服务器文件系统
-- `GRANT OPTION`：可以把权限再授予别人，导致权限失控
-- `ALL PRIVILEGES`：包含以上所有危险权限
+```sql
+CREATE USER 'dba'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
+GRANT ALL PRIVILEGES ON *.* TO 'dba'@'192.168.100.%' WITH GRANT OPTION;
+```
+
+生产环境不要给远程账号 `ALL PRIVILEGES`，这里仅用于课堂管理演示。
 
 </aside>
 
-### 1.6 权限变更何时生效：FLUSH PRIVILEGES 要不要执行？
+### 1.3 认识 Navicat 主界面
 
-<aside>
-💬
+连接成功后，重点认识以下区域：
 
-**记忆口诀**：用标准语句，不用 flush；直接改表，必须 flush。
+| 区域 | 作用 |
+| --- | --- |
+| 左侧连接树 | 查看连接、数据库、表、视图、函数、事件等对象 |
+| 对象工具栏 | 新建表、设计表、打开表、删除对象 |
+| 查询窗口 | 编写并执行 SQL，适合验证界面操作结果 |
+| 表设计器 | 图形化维护字段、主键、索引、外键 |
+| 用户管理 | 创建账号、分配权限、锁定账号 |
+| 工具菜单 | 导入导出、转储 SQL、运行 SQL、数据传输、结构同步 |
 
-</aside>
+### 1.4 图形化操作后的命令行验证
 
-| 操作方式 | 是否需要 `FLUSH PRIVILEGES` | 原因 |
-| --- | --- | --- |
-| `CREATE USER` / `ALTER USER` / `DROP USER` | 不需要 | MySQL 自动刷新权限缓存 |
-| `GRANT` / `REVOKE` | 不需要 | MySQL 自动刷新权限缓存 |
-| `UPDATE mysql.user` / `DELETE FROM mysql.user` | 需要 | 直接改系统表，需手动让 MySQL 重新加载 |
-
-<aside>
-⚠️
-
-**课堂建议**：不要直接 `UPDATE mysql.user`。账号和权限管理优先使用 `CREATE USER`、`ALTER USER`、`GRANT`、`REVOKE`、`DROP USER`。这样语义清晰、风险更低，也通常不需要手动 `FLUSH PRIVILEGES`。
-
-</aside>
-
-### 1.7 动手：创建四个角色账号
-
-回到 1.2 的场景分析，我们现在把四类角色变成四个 MySQL 账号。
-
-#### 第一步：分析每个账号的设计
-
-在写任何 SQL 之前，先想清楚三个问题：
-
-| 账号 | 来源 IP | 密码 | 需要什么权限 | 为什么 |
-| --- | --- | --- | --- | --- |
-| `reader` | `192.168.100.%` | `123456` | `SELECT` | 只需要查数据出报表，不能改 |
-| `writer` | `192.168.100.%` | `123456` | `SELECT, INSERT, UPDATE, DELETE` | 应用需要增删改查，但不能改表结构 |
-| `developer` | `192.168.100.%` | `123456` | `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX` | 开发需要建表改结构，但不能删库或授权 |
-| `app` | `192.168.100.%` | `123456` | 已有 | 项目五创建的全权限账号，本课不再使用 |
-
-> **为什么 `writer` 也要有 `SELECT`？** 因为大多数应用在更新/删除前都需要先查询。比如"修改工号 1001 的薪资"，要先 `SELECT` 找到这条记录，再 `UPDATE`。
->
-> **为什么 `developer` 不给 `DROP`？** `DROP TABLE` 是不可逆操作。开发者如果需要重建表，可以 `ALTER` 或者找 DBA 处理。
-
-#### 第二步：先降低密码策略
-
-> 项目五中已安装 `validate_password` 组件，MEDIUM 策略会拒绝 `123456`。创建账号前先降低策略（生产环境恢复为 MEDIUM）：
+每完成一个图形化操作，都建议在查询窗口中验证：
 
 ```sql
--- 检查密码策略组件是否已安装
-SELECT COMPONENT_ID, COMPONENT_URN FROM mysql.component
-  WHERE COMPONENT_URN LIKE '%validate_password%';
+-- 查看当前连接身份
+SELECT USER(), CURRENT_USER();
 
--- 如果已安装，降低策略
-SET GLOBAL validate_password.policy = LOW;
-SET GLOBAL validate_password.length = 6;
+-- 查看数据库
+SHOW DATABASES;
+
+-- 查看当前服务器版本
+SELECT VERSION();
 ```
-
-#### 第三步：创建账号并授权
-
-```sql
--- 只读账号（数据分析师用）
-CREATE USER 'reader'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
-GRANT SELECT ON employees.* TO 'reader'@'192.168.100.%';
-
--- 读写账号（应用系统用）
-CREATE USER 'writer'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE ON employees.* TO 'writer'@'192.168.100.%';
-
--- 开发者账号（开发人员用）
-CREATE USER 'developer'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, CREATE TEMPORARY TABLES
-  ON employees.*
-  TO 'developer'@'192.168.100.%';
-```
-
-#### 第四步：验证权限边界
-
-> 创建完不是终点，**验证才是**。用每个账号登录后，测试他能做什么、不能做什么。
-
-```sql
--- 在 root 账号下查看各账号的权限
-SHOW GRANTS FOR 'reader'@'192.168.100.%';
-SHOW GRANTS FOR 'writer'@'192.168.100.%';
-SHOW GRANTS FOR 'developer'@'192.168.100.%';
-```
-
-验证测试表：
-
-| 测试操作 | reader 应该 | writer 应该 | developer 应该 |
-| --- | --- | --- | --- |
-| `SELECT * FROM employees.employees LIMIT 1;` | ✅ 成功 | ✅ 成功 | ✅ 成功 |
-| `INSERT INTO employees.dept_emp VALUES (1, 'd001', '2024-01-01', '9999-01-01');` | ❌ 拒绝 | ✅ 成功 | ✅ 成功 |
-| `CREATE TABLE test_tbl (id INT);` | ❌ 拒绝 | ❌ 拒绝 | ✅ 成功 |
-| `DROP TABLE test_tbl;` | ❌ 拒绝 | ❌ 拒绝 | ❌ 拒绝 |
-
-> **小技巧**：在 Navicat 中也可以验证——用不同账号建连接，尝试执行上述操作，观察哪些成功、哪些报 `ACCESS DENIED`。
-
-### 1.8 权限修改：授权 + 撤权
-
-> **场景**：项目需求变了。writer 账号需要临时建一个测试表；developer 不应该再改表结构了（有专门的 DBA 了）。怎么办？
-
-```sql
--- 给 writer 添加 CREATE 权限（临时需要建表）
-GRANT CREATE ON employees.* TO 'writer'@'192.168.100.%';
-
--- 撤销 developer 的 ALTER 权限（不再允许改结构）
-REVOKE ALTER ON employees.* FROM 'developer'@'192.168.100.%';
-
--- 需求结束，撤销 writer 的 CREATE（收回临时权限）
-REVOKE CREATE ON employees.* FROM 'writer'@'192.168.100.%';
-
--- 撤销所有权限但不删除账号（账号还在，但什么也做不了）
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'reader'@'192.168.100.%';
-```
-
-<aside>
-⚠️
-
-**注意：MySQL 权限没有"显式 DENY"语法。** 如果数据库级授予了某表的 `SELECT`，不能再通过表级权限"拒绝"同一张表。要实现更细粒度控制，应从一开始就只授予需要的表级或列级权限。
-
-</aside>
 
 <aside>
 ✅
 
 **第 1 课小结**
 
-- 权限管理主线是查、改、锁、删
-- 创建账号前先想清楚：谁用、从哪连、要做什么、不能做什么
-- 多角色账号应遵循最小权限原则
-- 标准权限语句会自动生效；直接改 `mysql.user` 等系统表后才需要 `FLUSH PRIVILEGES`
+- Navicat 是图形化客户端，不是数据库本身
+- 管理操作建议使用专门的 `dba` 管理账号，不建议开放 root 远程登录
+- 图形化操作后要用 SQL 验证结果，避免“点了但不知道是否生效”
 
 </aside>
 
 ---
 
-## 第 2 课 账号生命周期与密码策略
+## 第 2 课 Navicat 图形化建库建表：管理数据库对象
 
-### 2.1 与上一课的衔接
+### 2.1 本课要解决的问题
 
-> 上一课创建了多角色账号。但账号不是创建完就不管了——**员工入职要开通账号，离职要关闭账号，密码泄露要强制改密码**。这就是账号生命周期管理。
+掌握数据库管理员最常见的对象维护任务：建库、建表、改字段、建索引、建外键、查看表数据。
 
-### 2.2 本课要解决的问题
+本课用 Navicat 创建一个员工管理实验库：`employees_lab`。
 
-- 掌握账号的锁定、过期、删除等生命周期操作
-- 理解密码策略参数，能区分课堂和生产环境配置
-- 能配置资源限制，防止账号滥用
+### 2.2 创建数据库
 
-### 2.3 账号生命周期全景
+在 Navicat 左侧连接上右键：
 
-> 一个账号从"出生"到"死亡"，经历哪些阶段？每个阶段对应什么操作？什么场景触发？
+1. 选择 **新建数据库**
+2. 填写：
 
-```text
-创建账号（入职 / 新项目）
-  ↓
-授权（分配权限）
-  ↓
-日常使用
-  ↓  ┌──────────────────────────────┐
-  ├──│ 员工离职 → 锁定或删除账号    │
-  ├──│ 密码泄露 → 强制改密码        │
-  ├──│ 试用期转正 → 解锁账号        │
-  ├──│ 定期安全审计 → 密码过期      │
-  └──│ 业务下线 → 删除账号          │
-     └──────────────────────────────┘
-```
+| 配置项 | 值 |
+| --- | --- |
+| 数据库名 | `employees_lab` |
+| 字符集 | `utf8mb4` |
+| 排序规则 | `utf8mb4_unicode_ci` |
 
-### 2.4 查看现有账号
+3. 点击 **确定**
+4. 在左侧连接上右键 **刷新**
 
-> 操作之前先看清现状：系统里有哪些账号？用什么认证方式？有没有被锁定的？
+在查询窗口验证：
 
 ```sql
--- 查看所有账号
-SELECT user, host, plugin, account_locked FROM mysql.user;
-
--- 只看有密码的账号（排除 auth_socket）
-SELECT user, host, plugin FROM mysql.user WHERE plugin != 'auth_socket';
+SHOW CREATE DATABASE employees_lab;
 ```
 
-### 2.5 修改密码
+<aside>
+💬
 
-> **场景一**：员工忘记密码了，需要重置。
-> **场景二**：定期安全巡检，需要批量修改密码。
+**为什么仍然选 utf8mb4？**
+
+项目五已经说明 MySQL 的 `utf8` 不是真正完整 UTF-8。图形化建库时也要主动选择 `utf8mb4`，避免中文、特殊符号或 Emoji 存储异常。
+
+</aside>
+
+### 2.3 创建部门表 `departments`
+
+展开 `employees_lab` → 右键 **表** → **新建表**。
+
+添加字段：
+
+| 字段名 | 类型 | 长度 | 允许空 | 键 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `dept_id` | `varchar` | 10 | 否 | 主键 | 部门编号 |
+| `dept_name` | `varchar` | 50 | 否 | 唯一索引 | 部门名称 |
+| `created_at` | `timestamp` |  | 否 |  | 创建时间 |
+
+设置建议：
+
+- 将 `dept_id` 设置为主键
+- `created_at` 默认值设置为 `CURRENT_TIMESTAMP`
+- 给 `dept_name` 创建唯一索引，防止部门重名
+- 保存表名为 `departments`
+
+对应 SQL 可在查询窗口验证：
 
 ```sql
--- 修改其他用户的密码（管理员操作，MySQL 8.0 推荐）
-ALTER USER 'app'@'192.168.100.%' IDENTIFIED BY '123456';
-
--- 修改自己的密码（用户自行操作）
-ALTER USER USER() IDENTIFIED BY '123456';
+SHOW CREATE TABLE employees_lab.departments\G
 ```
 
-### 2.6 撤销权限
+### 2.4 创建员工表 `employees`
 
-> **场景**：writer 账号之前有 DELETE 权限，但业务调整后不再需要删除数据了。
+继续新建表 `employees`：
+
+| 字段名 | 类型 | 长度 | 允许空 | 键 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `emp_id` | `int` |  | 否 | 主键 | 员工编号 |
+| `emp_name` | `varchar` | 50 | 否 |  | 员工姓名 |
+| `dept_id` | `varchar` | 10 | 否 | 普通索引 / 外键 | 所属部门 |
+| `salary` | `decimal` | 10,2 | 是 |  | 薪资 |
+| `hire_date` | `date` |  | 否 |  | 入职日期 |
+| `updated_at` | `timestamp` |  | 否 |  | 更新时间 |
+
+表设计器中注意：
+
+- `emp_id` 设置为主键并勾选自动递增
+- `salary` 使用 `DECIMAL(10,2)`，不要用 `FLOAT` 存钱
+- `updated_at` 默认值设置为 `CURRENT_TIMESTAMP`，并设置更新时自动刷新
+- `dept_id` 建普通索引，后面用于外键
+
+对应 SQL 示例：
 
 ```sql
--- 撤销 DELETE 权限（只保留 SELECT, INSERT, UPDATE）
-REVOKE DELETE ON stusta.* FROM 'app'@'192.168.100.%';
-
--- 验证
-SHOW GRANTS FOR 'app'@'192.168.100.%';
+CREATE TABLE employees_lab.employees (
+    emp_id INT PRIMARY KEY AUTO_INCREMENT,
+    emp_name VARCHAR(50) NOT NULL,
+    dept_id VARCHAR(10) NOT NULL,
+    salary DECIMAL(10,2),
+    hire_date DATE NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_dept_id (dept_id),
+    CONSTRAINT fk_emp_dept FOREIGN KEY (dept_id)
+        REFERENCES employees_lab.departments(dept_id)
+);
 ```
 
-### 2.7 锁定与解锁账号
+### 2.5 图形化创建外键
 
-> **场景**：员工离职了，但不确定他的账号是否还被其他系统引用。直接删怕出问题，先锁住。
+在 `employees` 表设计器中：
 
-```sql
--- 临时锁定账号（禁止登录，但不删除，数据权限都还在）
-ALTER USER 'app'@'192.168.100.%' ACCOUNT LOCK;
-
--- 验证：用 app 账号登录会报 "Access denied for user ... ACCOUNT IS LOCKED"
-
--- 员工回来了或者确认要恢复
-ALTER USER 'app'@'192.168.100.%' ACCOUNT UNLOCK;
-```
-
-> **锁定 vs 删除的区别**：
->
-> | 操作 | 账号还在吗 | 权限还在吗 | 能恢复吗 | 适用场景 |
-> | --- | --- | --- | --- | --- |
-> | 锁定 | ✅ | ✅ | ✅ 解锁即可 | 员工离职，暂时禁用 |
-> | 删除 | ❌ | ❌ | ❌ 不可逆 | 确认不再需要 |
-
-### 2.8 设置密码过期
-
-> **场景一**：发现某个账号的密码可能泄露了，强制下次登录必须改密码。
-> **场景二**：公司安全策略要求每 90 天必须改密码。
-
-```sql
--- 让账号密码立即过期（下次登录必须改密码）
-ALTER USER 'writer'@'192.168.100.%' PASSWORD EXPIRE;
-
--- 设置密码 90 天后过期（生产环境推荐）
-ALTER USER 'writer'@'192.168.100.%' PASSWORD EXPIRE INTERVAL 90 DAY;
-
--- 密码永不过期（课堂环境使用，避免学生被强制改密码卡住）
-ALTER USER 'writer'@'192.168.100.%' PASSWORD EXPIRE NEVER;
-```
-
-> **课堂注意**：本课所有账号密码设为永不过期，避免操作中途被强制改密码。
-
-### 2.9 删除账号
-
-> **场景**：确认某个账号已经没有任何业务在使用了，可以彻底删除。
-
-```sql
--- 删除前先查：有没有视图、存储过程依赖这个账号
-SELECT * FROM information_schema.VIEWS WHERE DEFINER LIKE '%app%';
-
--- 确认安全后删除（不可逆）
-DROP USER 'app'@'192.168.100.%';
-```
+1. 切换到 **外键** 页签
+2. 新建外键，名称填写 `fk_emp_dept`
+3. 字段选择 `dept_id`
+4. 参考数据库选择 `employees_lab`
+5. 参考表选择 `departments`
+6. 参考字段选择 `dept_id`
+7. 保存表结构
 
 <aside>
 ⚠️
 
-**删除前先查依赖**：在删除账号前，检查是否有视图、存储过程或定时任务引用了该账号，避免删除后导致业务报错。
+**外键创建失败常见原因**
+
+- 两边字段类型或长度不一致，例如一个是 `varchar(10)`，另一个是 `varchar(20)`
+- 被引用字段不是主键或唯一索引
+- 表引擎不是 InnoDB
+- 已有数据违反外键约束
 
 </aside>
 
-### 2.10 一张表记住生命周期
+### 2.6 录入和编辑数据
 
-| 场景 | 操作 | 命令 |
-| --- | --- | --- |
-| 员工入职 | 创建账号 | `CREATE USER ...` |
-| 分配权限 | 授权 | `GRANT ... ON ... TO ...` |
-| 权限调整 | 撤权 | `REVOKE ... ON ... FROM ...` |
-| 员工离职 | 锁定账号 | `ALTER USER ... ACCOUNT LOCK;` |
-| 员工回来 | 解锁账号 | `ALTER USER ... ACCOUNT UNLOCK;` |
-| 密码泄露 | 强制改密码 | `ALTER USER ... PASSWORD EXPIRE;` |
-| 定期安全 | 90 天过期 | `ALTER USER ... PASSWORD EXPIRE INTERVAL 90 DAY;` |
-| 业务下线 | 删除账号 | `DROP USER ...;` |
+打开 `departments` 表，添加示例数据：
 
-### 2.11 密码策略详解
+| dept_id | dept_name |
+| --- | --- |
+| d001 | 技术部 |
+| d002 | 财务部 |
+| d003 | 运营部 |
 
-> **问题**：前面我们一直用 `123456` 作为密码，这在课堂没问题，但在生产环境呢？
->
-> - 2019 年，某公司数据库被拖库，原因就是 admin 账号密码是 `123456`
-> - 2021 年，勒索软件攻击 MySQL 服务器，专门扫描弱密码账号
->
-> MySQL 8.0 提供了 `validate_password` 组件来强制密码复杂度。
+打开 `employees` 表，添加示例数据：
 
-#### 密码策略参数说明
+| emp_name | dept_id | salary | hire_date |
+| --- | --- | --- | --- |
+| 张三 | d001 | 8500.00 | 2024-03-01 |
+| 李四 | d002 | 7800.00 | 2024-04-15 |
+| 王五 | d003 | 6900.00 | 2024-05-20 |
+
+用查询窗口验证：
 
 ```sql
--- 查看当前策略
-SHOW VARIABLES LIKE 'validate_password%';
+SELECT e.emp_id, e.emp_name, d.dept_name, e.salary, e.hire_date
+FROM employees_lab.employees e
+JOIN employees_lab.departments d ON e.dept_id = d.dept_id;
 ```
 
-| 参数 | 含义 | 默认值 | 课堂值 | 生产建议值 |
-| --- | --- | --- | --- | --- |
-| `validate_password.policy` | 策略等级 | MEDIUM | LOW | MEDIUM |
-| `validate_password.length` | 密码最短长度 | 8 | 6 | 8+ |
-| `validate_password.mixed_case_count` | 大小写字母最少各几个 | 1 | 0（LOW 模式不检查） | 1 |
-| `validate_password.number_count` | 数字最少几个 | 1 | 0（LOW 模式不检查） | 1 |
-| `validate_password.special_char_count` | 特殊字符最少几个 | 1 | 0（LOW 模式不检查） | 1 |
+### 2.7 修改表结构的安全流程
 
-策略等级说明：
-- `LOW`：只检查长度（课堂环境使用）
-- `MEDIUM`：长度 + 大小写 + 数字 + 特殊字符（生产环境推荐）
-- `STRONG`：MEDIUM + 字典检查（高安全要求场景）
+图形化改表很方便，但也容易误操作。建议遵循：
 
-<aside>
-💡
-
-**课堂 vs 生产**
-
-- **课堂**：`policy = LOW`，`length = 6`，密码统一 `123456`，专注学习操作流程
-- **生产**：`policy = MEDIUM` 或 `STRONG`，`length ≥ 8`，必须使用强密码
-
-策略的修改是临时生效的（`SET GLOBAL`），重启后恢复默认。如果需要永久生效，在配置文件中添加：
-
-```ini
-[mysqld]
-validate_password.policy = LOW
-validate_password.length = 6
-```
-
-</aside>
-
-### 2.12 资源限制
-
-> **场景**：你发现某个 API 账号每小时执行了 10 万次查询，把数据库拖慢了。或者某个开发者同时开了 50 个连接做测试。
->
-> **问题**：能不能限制一个账号的使用量？
-
-```sql
-CREATE USER 'limited_app'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
-GRANT SELECT, INSERT, UPDATE, DELETE ON employees.* TO 'limited_app'@'192.168.100.%'
-WITH MAX_QUERIES_PER_HOUR 1000
-     MAX_UPDATES_PER_HOUR 100
-     MAX_CONNECTIONS_PER_HOUR 50
-     MAX_USER_CONNECTIONS 5;
-```
-
-每个参数的含义和应用场景：
-
-| 参数 | 含义 | 典型场景 |
-| --- | --- | --- |
-| `MAX_QUERIES_PER_HOUR 1000` | 每小时最多 1000 次查询 | 限制外部 API 调用频率 |
-| `MAX_UPDATES_PER_HOUR 100` | 每小时最多 100 次写操作 | 防止批量刷数据 |
-| `MAX_CONNECTIONS_PER_HOUR 50` | 每小时最多连接 50 次 | 防止连接风暴 |
-| `MAX_USER_CONNECTIONS 5` | 同时最多 5 个连接 | 防止一个账号占满连接池 |
-
-> **什么时候需要资源限制？**
->
-> - 面向外部系统的 API 账号 → 限制查询频率，防止被滥用
-> - 第三方合作伙伴的只读账号 → 限制连接数，防止占满资源
-> - 测试环境中的公共账号 → 限制写操作频率，防止误操作刷数据
+1. 修改前右键表 → **转储 SQL 文件**，先备份
+2. 在测试库验证修改
+3. 使用 **设计表** 修改字段或索引
+4. 保存前查看 Navicat 生成的 SQL
+5. 保存后用 `SHOW CREATE TABLE` 验证
 
 <aside>
 ✅
 
 **第 2 课小结**
 
-- 账号有完整生命周期：创建 → 授权 → 验证 → 修改 → 锁定 → 删除
-- 每个生命周期操作都有对应的场景：离职锁定、泄露过期、下线删除
-- 课堂密码统一 `123456`，创建账号前需先降低 `validate_password` 策略为 LOW
-- 生产环境使用 MEDIUM/STRONG 策略，强制密码复杂度
-- 资源限制可用于防止账号滥用
+- Navicat 可以完成建库、建表、字段、索引、外键等对象管理
+- 金额字段用 `DECIMAL`，中文库表统一 `utf8mb4`
+- 图形化改表前先备份，保存前看 SQL，保存后再验证
 
 </aside>
 
 ---
 
-## 第 3 课 日志与排错：出事能查
+## 第 3 课 Navicat 用户与权限管理：图形化落实最小权限
 
-### 3.1 与上一课的衔接
+### 3.1 本课要解决的问题
 
-> 前两课解决了"管得住人"的问题。但数据库运维中，**出了问题能快速定位**同样重要。
->
-> 想象一下：
-> - 早上 9 点，用户说"系统好慢" → 你怎么查？
-> - 凌晨 3 点，数据库挂了 → 你看什么？
-> - 有人怀疑数据被篡改了 → 你怎么追溯？
+项目五已经讲过 `CREATE USER`、`GRANT`、`REVOKE`。本课重点是：**如何在 Navicat 中完成同样的权限管理，并验证权限边界**。
 
-### 3.2 本课要解决的问题
+### 3.2 角色设计
 
-- 知道四类日志分别在什么场景用
-- 能查看错误日志、能开启/查看慢查询日志
-- 理解通用查询日志的适用场景
+以 `employees_lab` 为例，设计三类账号：
 
-### 3.3 四种主要日志——先知道看什么
-
-> 遇到不同问题，要看不同的日志。先记住这个对应关系：
-
-| 你遇到的问题 | 应该看的日志 | 为什么 |
-| --- | --- | --- |
-| 数据库启动不了 / 崩溃了 | **错误日志** | 记录了所有启动、运行、关闭时的错误 |
-| 系统变慢，不知道哪条 SQL 慢 | **慢查询日志** | 专门记录超过阈值的 SQL |
-| 需要追溯"谁在什么时候执行了什么" | **通用查询日志** | 记录每一条 SQL（但代价大） |
-| 需要恢复数据或做主从复制 | **二进制日志（binlog）** | 记录所有写操作事件（项目五已学） |
-
-### 3.4 错误日志：数据库挂了先看这里
-
-> **场景**：你到公司发现 MySQL 服务挂了，`systemctl start mysql` 也启动失败。第一件事看什么？错误日志。
-
-```bash
-# 查看最近 100 行错误日志
-tail -100 /var/log/mysql/error.log
-
-# 实时跟踪（排查启动问题时特别有用）
-sudo tail -f /var/log/mysql/error.log
-```
-
-```sql
--- 在 MySQL 内查看错误日志路径
-SHOW VARIABLES LIKE 'log_error';
-```
-
-#### 常见错误日志场景
-
-| 日志关键字 | 含义 | 排查方向 |
-| --- | --- | --- |
-| `[ERROR] Can't start server` | 服务启动失败 | 检查端口冲突、配置文件语法、磁盘空间 |
-| `[ERROR] Access denied` | 认证失败 | 检查用户名/密码/主机权限 |
-| `[ERROR] Disk full` | 磁盘满 | 清理日志、扩展磁盘 |
-| `[Warning] IP address 'x.x.x.x' could not be resolved` | DNS 反解失败 | 设置 `skip_name_resolve` |
-
-<aside>
-🔧
-
-**快速排错步骤**：
-
-1. 先看 `tail -50 /var/log/mysql/error.log`
-2. 找到最近的 `[ERROR]` 行
-3. 复制错误信息搜索解决方案
-4. 如果服务完全启动不了：`sudo systemctl status mysql` 查看 systemd 层面的报错
-
-</aside>
-
-### 3.5 慢查询日志：系统慢了怎么找 SQL
-
-> **场景**：用户反馈"页面加载很慢"，但不知道是哪条 SQL 慢。怎么定位？
->
-> **思路**：开启慢查询日志 → 让 MySQL 自动记录超过阈值的 SQL → 用工具分析 → 找到最慢的几条 → 优化它们。
-
-#### 开启与配置
-
-```sql
--- 查看当前状态
-SHOW VARIABLES LIKE 'slow_query%';
-SHOW VARIABLES LIKE 'long_query_time';
-
--- 开启慢查询日志（临时生效，重启后失效）
-SET GLOBAL slow_query_log = 1;
-SET GLOBAL long_query_time = 1;   -- 超过 1 秒的 SQL 记录到慢查询日志
-SET GLOBAL log_queries_not_using_indexes = 1;  -- 没用索引的也记录
-```
-
-在配置文件中永久生效：
-
-```ini
-[mysqld]
-slow_query_log = 1
-slow_query_log_file = /var/log/mysql/slow.log
-long_query_time = 1
-log_queries_not_using_indexes = 1
-```
-
-#### 查看慢查询日志
-
-```bash
-# 查看慢查询日志
-sudo tail -50 /var/log/mysql/slow.log
-```
-
-```sql
--- 统计慢查询数量
-SHOW GLOBAL STATUS LIKE 'Slow_queries';
-```
-
-#### 用 mysqldumpslow 分析
-
-> 慢查询日志可能很长，手动看效率低。`mysqldumpslow` 工具可以帮你汇总分析。
-
-```bash
-# 按执行次数排序，显示前 10 条
-sudo mysqldumpslow -s c -t 10 /var/log/mysql/slow.log
-
-# 按平均执行时间排序
-sudo mysqldumpslow -s at -t 10 /var/log/mysql/slow.log
-
-# 按锁定时间排序
-sudo mysqldumpslow -s t -t 10 /var/log/mysql/slow.log
-```
-
-| 参数 | 含义 |
-| --- | --- |
-| `-s c` | 按查询次数（count）排序 |
-| `-s at` | 按平均查询时间（avg time）排序 |
-| `-s t` | 按总锁定时间排序 |
-| `-t N` | 只显示前 N 条 |
-
-### 3.6 通用查询日志：临时排错利器
-
-> **场景**：某条数据被莫名修改了，你需要追溯"到底是谁、在什么时候执行了什么 SQL"。错误日志和慢查询日志都看不到。
->
-> **问题**：通用查询日志能记录每一条 SQL，但为什么不能一直开着？
-
-通用查询日志记录**每一条**到达 MySQL 的 SQL，包括连接、断开、查询。由于日志量巨大，**只在排错时临时开启**。
-
-```sql
--- 查看当前状态
-SHOW VARIABLES LIKE 'general_log%';
-
--- 临时开启（排错时使用）
-SET GLOBAL general_log = 1;
-SET GLOBAL general_log_file = '/var/log/mysql/general.log';
-
--- ... 执行需要排查的操作 ...
-
--- 排查完毕，立即关闭
-SET GLOBAL general_log = 0;
-```
-
-> **算一笔账**：假设系统每秒执行 1000 条 SQL，通用查询日志每条 SQL 约 200 字节，那么每秒产生 200KB，每天约 17GB。这就是为什么不能长期开启。
+| 账号 | 来源主机 | 密码 | 权限范围 | 适用角色 |
+| --- | --- | --- | --- | --- |
+| `reader` | `192.168.100.%` | `123456` | `SELECT` | 数据分析、报表查询 |
+| `writer` | `192.168.100.%` | `123456` | `SELECT, INSERT, UPDATE, DELETE` | 应用系统 |
+| `developer` | `192.168.100.%` | `123456` | `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX` | 开发测试 |
 
 <aside>
 ⚠️
 
-**通用查询日志是性能杀手**
-
-在生产环境长期开启通用查询日志，每秒可能产生数 MB 日志，迅速填满磁盘。只用于临时排错，用完即关。
+**不要为了省事给业务账号 ALL PRIVILEGES。** 图形化工具会让授权变得很容易，但越容易越要谨慎。
 
 </aside>
+
+### 3.3 在 Navicat 中创建用户
+
+进入用户管理界面：
+
+1. 右键连接 → **管理用户**，或菜单中打开用户管理
+2. 点击 **新建用户**
+3. 填写：
+   - 用户名：`reader`
+   - 主机：`192.168.100.%`
+   - 密码：`123456`
+4. 认证插件优先选择兼容 Navicat 的 `mysql_native_password`
+5. 保存
+
+按同样方式创建 `writer` 和 `developer`。
+
+如果界面创建失败，回到查询窗口先降低课堂密码策略：
+
+```sql
+SET GLOBAL validate_password.policy = LOW;
+SET GLOBAL validate_password.length = 6;
+```
+
+### 3.4 在 Navicat 中分配权限
+
+在用户管理中选择 `reader@192.168.100.%`：
+
+1. 打开 **权限** 页签
+2. 找到数据库 `employees_lab`
+3. 只勾选 `SELECT`
+4. 保存
+
+`writer` 勾选：
+
+- `SELECT`
+- `INSERT`
+- `UPDATE`
+- `DELETE`
+
+`developer` 勾选：
+
+- `SELECT`
+- `INSERT`
+- `UPDATE`
+- `DELETE`
+- `CREATE`
+- `ALTER`
+- `INDEX`
+
+保存后用 SQL 验证：
+
+```sql
+SHOW GRANTS FOR 'reader'@'192.168.100.%';
+SHOW GRANTS FOR 'writer'@'192.168.100.%';
+SHOW GRANTS FOR 'developer'@'192.168.100.%';
+```
+
+### 3.5 用不同连接验证权限边界
+
+在 Navicat 中分别新建三个连接：
+
+- `MySQL-reader`
+- `MySQL-writer`
+- `MySQL-developer`
+
+每个连接使用对应账号登录，然后执行测试：
+
+| 测试操作 | reader | writer | developer |
+| --- | --- | --- | --- |
+| `SELECT * FROM employees_lab.employees;` | 应成功 | 应成功 | 应成功 |
+| `INSERT INTO employees_lab.departments VALUES ('d004','人事部',NOW());` | 应失败 | 应成功 | 应成功 |
+| `UPDATE employees_lab.employees SET salary=salary+100 WHERE emp_id=1;` | 应失败 | 应成功 | 应成功 |
+| `CREATE TABLE employees_lab.tmp_test (id INT);` | 应失败 | 应失败 | 应成功 |
+| `DROP DATABASE employees_lab;` | 应失败 | 应失败 | 应失败 |
+
+<aside>
+💬
+
+**为什么要用不同连接验证？**
+
+权限是连接时按账号身份匹配的。只在管理员连接里看 `SHOW GRANTS` 不够，必须真的用目标账号登录，才能确认权限边界是否符合预期。
+
+</aside>
+
+### 3.6 图形化锁定、解锁和删除账号
+
+在用户管理中可以完成账号生命周期维护：
+
+| 场景 | Navicat 操作 | SQL 对应 |
+| --- | --- | --- |
+| 员工离职但不确定是否仍被系统使用 | 锁定账号 | `ALTER USER ... ACCOUNT LOCK;` |
+| 账号恢复使用 | 解锁账号 | `ALTER USER ... ACCOUNT UNLOCK;` |
+| 账号确认废弃 | 删除用户 | `DROP USER ...;` |
+| 怀疑密码泄露 | 修改密码 | `ALTER USER ... IDENTIFIED BY ...;` |
+
+删除前先在查询窗口检查依赖：
+
+```sql
+SELECT * FROM information_schema.VIEWS WHERE DEFINER LIKE '%reader%';
+SELECT * FROM information_schema.ROUTINES WHERE DEFINER LIKE '%reader%';
+```
 
 <aside>
 ✅
 
 **第 3 课小结**
 
-- **错误日志**：服务异常第一入口，`tail -f /var/log/mysql/error.log`
-- **慢查询日志**：会开、会看、会用 `mysqldumpslow` 定位慢 SQL
-- **通用查询日志**：临时排错利器，用完即关
-- **binlog**：项目五已学，用途是复制 + PITR 恢复
+- Navicat 能创建用户、分配权限、锁定账号和删除账号
+- 权限设计仍然遵循最小权限原则
+- 图形化授权后必须用 `SHOW GRANTS` 和不同账号连接双重验证
 
 </aside>
 
 ---
 
-## 第 4 课 安全加固与高可用：防得住攻击
+## 第 4 课 Navicat 数据维护：导入、导出、备份、还原
 
-### 4.1 与上一课的衔接
+### 4.1 本课要解决的问题
 
-> 前三课解决了权限管理、账号生命周期和日志排错。最后一课从**攻防视角**看 MySQL 安全——如果你是黑客，你会怎么攻击？如果你是 DBA，你怎么防御？
+数据库日常维护不只是建表授权，还包括数据迁移、备份、还原和批量处理。本课用 Navicat 完成常见维护动作。
 
-### 4.2 本课要解决的问题
+### 4.2 表数据导出
 
-- 能识别 MySQL 常见攻击方式，并给出对应防御措施
-- 了解 MySQL 高可用方案的基本原理
+右键 `employees_lab.employees` 表 → **导出向导**。
 
-### 4.3 攻击场景分析
+常见导出格式：
 
-> 先站在攻击者角度思考：MySQL 数据库暴露在网络上，攻击者有哪些入手点？
+| 格式 | 适用场景 |
+| --- | --- |
+| Excel / CSV | 给业务人员、数据分析师查看 |
+| SQL | 迁移到另一台 MySQL 或备份表数据 |
+| JSON | 与接口、脚本、文档系统交换数据 |
 
-```text
-攻击者的思路：
-  ① 能不能直接连上？ → 弱密码 / 默认账号 / 匿名用户
-  ② 连上后能做什么？ → 权限过大 → 读取敏感数据 / 修改数据
-  ③ 能不能提权？ → FILE 权限 → UDF 提权 → 控制操作系统
-  ④ 应用层面有没有漏洞？ → SQL 注入 → 绕过认证 / 拖库
-```
+导出 CSV 时建议：
 
-### 4.4 SQL 注入
+- 字符编码选择 `UTF-8`
+- 勾选字段名作为首行
+- 日期时间格式保持默认或统一为 `YYYY-MM-DD`
 
-> **场景**：一个登录页面的后端代码这样写：
->
-> ```python
-> # 危险写法：直接拼接 SQL
-> sql = "SELECT * FROM users WHERE username='" + username + "' AND password='" + password + "'"
-> ```
->
-> 攻击者在用户名输入 `' OR '1'='1`，SQL 变成了：
->
-> ```sql
-> SELECT * FROM users WHERE username='' OR '1'='1' AND password='xxx'
-> ```
->
-> `'1'='1'` 永远为真，攻击者无需密码就登录了。
+### 4.3 表数据导入
 
-**防御措施**：
+右键目标表 → **导入向导**。
 
-- 使用参数化查询（预编译语句），不要拼接 SQL
-- 输入验证和过滤
-- 部署 WAF（Web 应用防火墙）
-- 数据库账号遵循最小权限原则（即使注入成功，也只能操作授权范围内的数据）
+导入前检查：
 
-### 4.5 弱密码暴力破解
-
-> **场景**：攻击者用脚本尝试常见密码：root/123456、root/admin、root/password……每秒尝试几百次，24 小时不间断。
->
-> **问题**：如果 root 允许远程登录且密码是 `123456`，多快会被破解？答案是几秒。
-
-**防御措施**：
-
-- 启用 `validate_password` 组件，强制密码复杂度
-- 限制账号来源 IP（`'user'@'192.168.100.%'` 而非 `'user'@'%'`）
-- 禁止 root 远程登录
-- 部署防火墙，限制 3306 端口的访问来源
-
-### 4.6 未授权访问
-
-> **场景**：MySQL 的 3306 端口直接暴露在公网上，且存在匿名用户或 test 数据库。攻击者可以直接连上来探索。
-
-**防御措施**：
-
-- 限制 `bind-address`，只开放内网访问
-- 配合防火墙或安全组
-- 删除匿名用户和 test 数据库
-- 使用 SSH 隧道而非直接暴露 3306 端口
-
-### 4.7 UDF 提权
-
-> **场景**：攻击者拿到了一个普通账号的权限，但这个账号有 `FILE` 权限。他上传了一个自定义函数（UDF），通过 UDF 执行操作系统命令——从数据库权限升级到了操作系统权限。
-
-**防御措施**：
-
-- 不授予业务账号 `FILE` 权限
-- 限制文件读写路径（`secure_file_priv`）
-- 定期审计账号和权限
-
-### 4.8 安全加固清单
-
-> 把以上所有防御措施汇总成一份清单，逐项检查：
-
-| 加固措施 | 命令 / 操作 | 防御什么 |
-| --- | --- | --- |
-| 禁止 root 远程登录 | `mysql_secure_installation` | 远程暴力破解 |
-| 限制账号来源 IP | `'user'@'192.168.100.%'` | 未知网络连接 |
-| 启用密码验证组件 | `INSTALL COMPONENT 'file://component_validate_password'` | 弱密码 |
-| 定期轮换密码 | `ALTER USER ... IDENTIFIED BY ...` | 密码泄露后的窗口期 |
-| 锁定不用的账号 | `ALTER USER ... ACCOUNT LOCK` | 废弃账号被利用 |
-| 最小权限原则 | 只授予业务所需权限 | 权限滥用 / 提权 |
-| 删除匿名用户 | `DROP USER ''@'localhost'` | 匿名访问 |
-| 删除 test 数据库 | `DROP DATABASE test` | 测试库被利用 |
-| 限制 FILE 权限 | 不授予业务账号 FILE 权限 | UDF 提权 |
-| 开启 binlog | 项目五已配置 | 数据恢复 / 审计追溯 |
-
-### 4.9 MySQL 高可用方案
-
-> **问题**：主从复制（项目五已学）解决了"数据备份"和"读写分离"的问题，但主库挂了怎么办？
->
-> **答案**：需要**自动故障转移**——当主库不可用时，自动把一个从库提升为新主库。这就是高可用方案要解决的事。
-
-| 方案 | 原理 | 适用场景 |
-| --- | --- | --- |
-| InnoDB Cluster | 基于 Group Replication 的自动故障转移 | 官方推荐的高可用方案 |
-| PXC | 同步多主复制 | 强一致性要求场景 |
-| MHA | 自动主从切换 | 传统主从复制升级 |
-| ProxySQL / MySQL Router | 读写分离中间件 | 配合主从复制使用 |
+1. CSV / Excel 字段名是否和表字段对应
+2. 字符编码是否为 UTF-8
+3. 日期格式是否能被 MySQL 识别
+4. 外键字段是否存在对应主表记录
+5. 主键是否重复
 
 <aside>
-💬
+🔧
 
-**初学者掌握重点**
+**导入失败排错顺序**
 
-当前阶段重点是理解主从复制（项目五已学）和基本加固思路即可，高可用方案了解名称和用途就够了。
-
-**从主从复制到高可用的演进路径**：
-
-1. 单机 → 主从复制（读写分离 + 热备）
-2. 主从复制 + MHA（自动故障切换）
-3. InnoDB Cluster（官方推荐，自动选主 + 数据一致性保证）
+1. 看错误提示中的行号
+2. 检查该行是否有空值、乱码、日期格式错误
+3. 检查主键是否重复
+4. 检查外键字段是否在主表存在
+5. 必要时先导入临时表，再用 SQL 清洗后写入正式表
 
 </aside>
+
+### 4.4 转储 SQL 文件备份
+
+右键数据库 `employees_lab` → **转储 SQL 文件** → **结构和数据**。
+
+建议文件名：
+
+```text
+employees_lab_20260512.sql
+```
+
+备份时建议勾选：
+
+- 包含表结构和数据
+- 使用 UTF-8 编码
+- 如果只想备份单个库并还原到同名库，可以勾选 `CREATE DATABASE`
+- 如果后面要还原到 `employees_lab_restore` 这样的测试库，**不要勾选 `CREATE DATABASE`**，避免 SQL 文件重新切回原库名
+
+<aside>
+⚠️
+
+**还原到测试库时要注意库名**
+
+如果 SQL 文件中包含：
+
+```sql
+CREATE DATABASE employees_lab;
+USE employees_lab;
+```
+
+即使你在 Navicat 中对 `employees_lab_restore` 执行“运行 SQL 文件”，数据也可能被还原到原来的 `employees_lab`。课堂建议：备份用于还原演练时，不勾选 `CREATE DATABASE`；如果已经勾选，需要先把 SQL 文件中的库名改成 `employees_lab_restore`。
+
+</aside>
+
+<aside>
+⚠️
+
+**备份文件不要只放在数据库服务器上。** 如果服务器磁盘损坏，备份也会一起丢失。至少要复制到宿主机或其他安全位置。
+
+</aside>
+
+### 4.5 运行 SQL 文件还原
+
+还原前建议新建一个测试库：`employees_lab_restore`。
+
+操作步骤：
+
+1. 右键连接 → **新建数据库** → `employees_lab_restore`
+2. 右键该数据库 → **运行 SQL 文件**
+3. 选择刚才导出的 `.sql` 文件
+4. 执行完成后刷新数据库
+5. 查询验证：
+
+```sql
+SELECT COUNT(*) FROM employees_lab_restore.employees;
+SELECT COUNT(*) FROM employees_lab_restore.departments;
+```
+
+### 4.6 数据传输与结构同步
+
+Navicat 的 **数据传输** 和 **结构同步** 常用于测试库、正式库之间迁移对象。
+
+| 功能 | 作用 | 风险点 |
+| --- | --- | --- |
+| 数据传输 | 把表结构和数据从一个库复制到另一个库 | 可能覆盖目标库对象 |
+| 结构同步 | 比较两个库的表结构差异并生成同步 SQL | 可能执行 `DROP` / `ALTER` |
+| 数据同步 | 比较两边数据并同步差异 | 可能误删或覆盖目标数据 |
+
+课堂建议流程：
+
+1. 先从源库传输到测试库
+2. 查看 Navicat 生成的 SQL
+3. 确认没有危险 `DROP` 操作
+4. 再执行同步
+
+### 4.7 日常维护操作清单
+
+| 维护事项 | Navicat 操作 | 验证方式 |
+| --- | --- | --- |
+| 备份数据库 | 转储 SQL 文件 | 新建测试库并还原 |
+| 批量导入数据 | 导入向导 | `COUNT(*)` 和抽样查询 |
+| 给业务导出数据 | 导出向导 | 打开 CSV / Excel 检查乱码 |
+| 修改表结构 | 设计表 | `SHOW CREATE TABLE` |
+| 同步测试库结构 | 结构同步 | 先查看生成 SQL |
 
 <aside>
 ✅
 
 **第 4 课小结**
 
-- 安全加固是持续工作，不是一劳永逸
-- 先站在攻击者角度想"能怎么攻"，再想"怎么防"
-- 常见攻击：SQL 注入、弱密码、未授权访问、UDF 提权
-- 防御核心：最小权限 + 强密码 + 网络隔离 + 审计日志
-- 高可用方案建立在主从复制基础上，当前了解即可
+- 导入导出解决数据交换问题，SQL 转储解决备份还原问题
+- 备份是否有效，必须通过还原验证
+- 数据传输、结构同步很方便，但执行前必须检查生成 SQL
 
 </aside>
 
 ---
 
-## 📝 项目总结（一张表复盘）
+## 第 5 课 Navicat 监控与排错：图形化看运行状态
+
+### 5.1 本课要解决的问题
+
+项目五已经学过错误日志、慢查询日志、通用查询日志和 binlog。本课不重复日志原理，重点学习：**如何用 Navicat 快速查看数据库当前状态，并辅助排错**。
+
+### 5.2 查看连接和进程
+
+在 Navicat 中打开服务器监控或进程列表，可以看到当前连接、用户、来源主机和正在执行的 SQL。
+
+对应 SQL：
+
+```sql
+SHOW PROCESSLIST;
+```
+
+重点关注：
+
+| 字段 | 含义 | 排查价值 |
+| --- | --- | --- |
+| `Id` | 连接 ID | 必要时用于结束连接 |
+| `User` | 当前用户 | 判断是否异常账号 |
+| `Host` | 来源主机 | 判断是否异常来源 IP |
+| `db` | 当前数据库 | 判断影响范围 |
+| `Command` | 当前命令 | Query / Sleep 等 |
+| `Time` | 持续时间 | 长时间运行可能有问题 |
+| `Info` | 正在执行的 SQL | 排查慢 SQL 或锁等待 |
+
+如需结束异常连接：
+
+```sql
+KILL 连接ID;
+```
+
+<aside>
+⚠️
+
+**不要随便 KILL。** 结束连接可能导致事务回滚、业务报错。课堂环境可以演示，生产环境必须先确认 SQL、来源和影响范围。
+
+</aside>
+
+### 5.3 查看服务器变量和状态
+
+Navicat 的服务器信息界面可以查看变量和状态。也可以在查询窗口执行：
+
+```sql
+-- 查看关键变量
+SHOW VARIABLES LIKE 'version';
+SHOW VARIABLES LIKE 'character_set_server';
+SHOW VARIABLES LIKE 'time_zone';
+SHOW VARIABLES LIKE 'log_bin';
+SHOW VARIABLES LIKE 'slow_query_log';
+SHOW VARIABLES LIKE 'general_log';
+
+-- 查看关键状态
+SHOW GLOBAL STATUS LIKE 'Threads_connected';
+SHOW GLOBAL STATUS LIKE 'Slow_queries';
+SHOW GLOBAL STATUS LIKE 'Connections';
+SHOW GLOBAL STATUS LIKE 'Uptime';
+```
+
+常见判断：
+
+| 现象 | 可能原因 | 下一步 |
+| --- | --- | --- |
+| `Threads_connected` 很高 | 连接池配置不当 / 连接泄漏 | 看进程列表来源 |
+| `Slow_queries` 增长快 | SQL 慢或缺索引 | 开慢查询日志并分析 |
+| `log_bin` 为 OFF | binlog 未开启 | 回到项目五配置 binlog |
+| 字符集不是 `utf8mb4` | 建库或配置不规范 | 检查库表字符集 |
+
+### 5.4 查看表信息和索引
+
+在 Navicat 中右键表 → **设计表** → 查看字段、索引、外键。
+
+常用 SQL 验证：
+
+```sql
+-- 查看表结构
+DESC employees_lab.employees;
+
+-- 查看索引
+SHOW INDEX FROM employees_lab.employees;
+
+-- 查看表大小和行数估计
+SELECT table_name, table_rows,
+       ROUND(data_length / 1024 / 1024, 2) AS data_mb,
+       ROUND(index_length / 1024 / 1024, 2) AS index_mb
+FROM information_schema.tables
+WHERE table_schema = 'employees_lab';
+```
+
+### 5.5 用 EXPLAIN 辅助查询优化
+
+在 Navicat 查询窗口执行：
+
+```sql
+EXPLAIN
+SELECT e.emp_name, d.dept_name
+FROM employees_lab.employees e
+JOIN employees_lab.departments d ON e.dept_id = d.dept_id
+WHERE d.dept_id = 'd001';
+```
+
+重点看：
+
+| 字段 | 说明 |
+| --- | --- |
+| `type` | 访问类型，越接近 `const` / `ref` 越好 |
+| `key` | 实际使用的索引 |
+| `rows` | 预计扫描行数，越少越好 |
+| `Extra` | 是否出现 `Using filesort`、`Using temporary` 等提示 |
+
+<aside>
+💬
+
+**初学者记住一句话**：慢 SQL 先看有没有合适索引，再看 `EXPLAIN` 有没有用上索引。
+
+</aside>
+
+### 5.6 图形化维护不要替代安全审计
+
+Navicat 能让管理更方便，但安全审计仍应保留 SQL 证据：
+
+```sql
+-- 查看用户和来源
+SELECT user, host, plugin, account_locked FROM mysql.user;
+
+-- 查看某个账号权限
+SHOW GRANTS FOR 'writer'@'192.168.100.%';
+
+-- 查看 binlog 状态
+SHOW BINARY LOG STATUS;
+
+-- 查看慢查询数量
+SHOW GLOBAL STATUS LIKE 'Slow_queries';
+```
+
+<aside>
+✅
+
+**第 5 课小结**
+
+- Navicat 可以查看进程、变量、状态、表结构和索引
+- 排错先看当前连接和正在执行的 SQL
+- 图形化查看很方便，但关键维护结论要用 SQL 留痕验证
+
+</aside>
+
+---
+
+## 第 6 课 安全加固、主从复制与高可用认知：从会操作到会维护
+
+### 6.1 本课要解决的问题
+
+前面已经学会了 Navicat 图形化管理数据库。本课把操作上升为维护规范：**哪些操作可以做，哪些操作要谨慎，生产环境如何防风险**。
+
+### 6.2 Navicat 使用安全规范
+
+| 风险操作 | 风险 | 建议 |
+| --- | --- | --- |
+| 远程使用 root | 一旦泄露就是最高权限 | 禁止 root 远程，使用专门 DBA 账号 |
+| 保存生产密码 | 本机被入侵会泄露凭证 | 生产连接谨慎保存密码 |
+| 图形化删除表 / 库 | 点击错误可能导致数据丢失 | 删除前先备份、再二次确认 |
+| 结构同步直接执行 | 可能生成 `DROP` / `ALTER` | 先查看 SQL，再测试库演练 |
+| 长期开启通用查询日志 | 影响性能、撑满磁盘 | 只在排错时临时开启 |
+
+### 6.3 MySQL 安全加固清单
+
+| 加固措施 | 检查方式 | 防御什么 |
+| --- | --- | --- |
+| 禁止 root 远程登录 | `SELECT user, host FROM mysql.user WHERE user='root';` | 远程暴力破解 |
+| 限制账号来源 IP | 查看用户 host 是否为内网网段 | 未授权来源连接 |
+| 强密码策略 | `SHOW VARIABLES LIKE 'validate_password%';` | 弱密码 |
+| 最小权限原则 | `SHOW GRANTS` | 权限滥用 |
+| 删除匿名用户 | `SELECT user, host FROM mysql.user WHERE user='';` | 匿名访问 |
+| 删除 test 数据库 | `SHOW DATABASES LIKE 'test';` | 测试库滥用 |
+| 不授予 FILE 权限 | `SHOW GRANTS` | UDF 提权 / 文件读写风险 |
+| 开启 binlog | `SHOW VARIABLES LIKE 'log_bin';` | 恢复和审计 |
+| 定期备份并验证还原 | Navicat 转储 + 测试库还原 | 误删和故障恢复 |
+
+### 6.4 常见攻击与防御回顾
+
+| 攻击方式 | 表现 | 防御措施 |
+| --- | --- | --- |
+| SQL 注入 | 应用拼接 SQL，攻击者绕过认证或拖库 | 参数化查询 + 最小权限 |
+| 弱密码爆破 | 反复尝试 root / 123456 等密码 | 强密码 + 限制来源 + 防火墙 |
+| 未授权访问 | 3306 暴露到公网 | 内网访问 + 安全组 / 防火墙 |
+| 权限过大 | 普通账号可删库、读系统表 | 按角色授权，不给 ALL |
+| UDF 提权 | 借助 FILE 权限写入恶意库文件 | 禁止业务账号 FILE 权限 |
+
+### 6.5 主从复制入门：让数据库具备热备能力
+
+单机 MySQL 即使配置再规范，也存在单点故障。主从复制要解决的问题是：**主库负责写入，从库持续同步主库数据，用于备份、读查询或故障切换准备**。
+
+#### 主从复制的基本角色
+
+| 角色 | 作用 | 初学者理解 |
+| --- | --- | --- |
+| 主库（Primary / Source） | 接收业务写入，产生 binlog | “原始账本” |
+| 从库（Replica） | 拉取并回放主库 binlog | “抄账本的人” |
+| 复制账号 | 专门给从库连接主库使用 | “只允许抄账的账号” |
+| binlog | 主库记录数据变更的日志 | “账本流水” |
+| relay log | 从库本地保存的中继日志 | “抄回来的草稿本” |
+
+<aside>
+💬
+
+**一句话理解主从复制**
+
+主库把所有写操作记录到 binlog；从库连接主库，把 binlog 拉到本地，再按顺序执行一遍，因此从库的数据会逐步追上主库。
+
+</aside>
+
+#### 主从复制的基本流程
+
+```text
+应用写入主库
+   ↓
+主库写入 binlog
+   ↓
+从库 I/O 线程连接主库并拉取 binlog
+   ↓
+从库写入 relay log
+   ↓
+从库 SQL 线程回放 relay log
+   ↓
+从库数据与主库保持同步
+```
+
+#### 搭建前必须满足的条件
+
+| 条件 | 检查方式 | 说明 |
+| --- | --- | --- |
+| 主库开启 binlog | `SHOW VARIABLES LIKE 'log_bin';` | 必须为 `ON` |
+| 主从 `server_id` 不同 | `SHOW VARIABLES LIKE 'server_id';` | 每台 MySQL 必须唯一 |
+| 主库允许从库访问 3306 | 防火墙 / 安全组 / 网络连通性检查 | 从库要能连到主库 |
+| 存在复制账号 | `SHOW GRANTS FOR 'repl'@'192.168.100.%';` | 只授予复制权限 |
+| 初始数据一致 | 全量备份还原到从库 | 否则复制起点不一致 |
+
+复制账号示例：
+
+```sql
+CREATE USER 'repl'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
+GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.168.100.%';
+```
+
+<aside>
+⚠️
+
+**复制账号不要给 ALL PRIVILEGES。** 它只需要读取主库 binlog 的能力，授予 `REPLICATION SLAVE` 即可。
+
+</aside>
+
+#### 从库复制状态怎么看
+
+在从库执行：
+
+```sql
+SHOW REPLICA STATUS\G
+```
+
+重点看这些字段：
+
+| 字段 | 正常值 / 关注点 | 含义 |
+| --- | --- | --- |
+| `Replica_IO_Running` | `Yes` | 从库能否连接主库并拉取日志 |
+| `Replica_SQL_Running` | `Yes` | 从库能否正常回放日志 |
+| `Seconds_Behind_Source` | 越小越好 | 从库落后主库多少秒 |
+| `Last_IO_Error` | 应为空 | 拉取日志错误原因 |
+| `Last_SQL_Error` | 应为空 | 回放日志错误原因 |
+
+MySQL 8.0 中推荐使用 `REPLICA` 术语；旧资料里常见 `SLAVE`，含义基本对应。课堂看到旧命令时要能认出来，例如 `SHOW SLAVE STATUS\G` 是旧写法。
+
+#### Navicat 中如何辅助查看主从状态
+
+Navicat 主要用于图形化观察和验证：
+
+1. 分别建立主库连接和从库连接
+2. 在主库执行写入测试，例如向 `employees_lab.departments` 插入一行
+3. 在从库刷新表数据，确认数据是否同步出现
+4. 在从库查询窗口执行 `SHOW REPLICA STATUS\G`
+5. 查看 `Replica_IO_Running`、`Replica_SQL_Running` 和错误字段
+
+<aside>
+✅
+
+**课堂掌握到这里即可**
+
+本项目不要求完整搭建生产级主从集群，但要理解：项目五的 binlog 是复制基础；项目六的备份还原用于准备从库初始数据；Navicat 可以辅助验证数据是否同步、复制线程是否正常。
+
+</aside>
+
+### 6.6 高可用方案认知
+
+主从复制只是高可用的基础，不等于完整高可用。完整高可用还要解决：**主库故障后，谁来判断故障、谁来切换新主库、应用如何连接到新主库**。
+
+| 方案 | 原理 | 初学者理解 |
+| --- | --- | --- |
+| 主从复制 | 主库写 binlog，从库回放同步数据 | 热备和读写分离基础 |
+| MHA | 监控主库，故障时提升从库为主库 | 传统主从自动切换 |
+| InnoDB Cluster | 基于 Group Replication 自动选主 | MySQL 官方高可用方案 |
+| MySQL Router / ProxySQL | 应用连接中间件，由中间件分发请求 | 配合主从或集群使用 |
+
+<aside>
+💬
+
+**当前阶段掌握重点**
+
+先把“单机安全 + 备份还原 + binlog + 主从复制基本原理”学扎实。后续再学习自动故障切换和集群方案时，才能理解为什么高可用不是只多装一台 MySQL。
+
+</aside>
+
+### 6.7 期末维护演练任务
+
+完成以下综合任务：
+
+1. 用 Navicat 新建 `employees_lab` 数据库
+2. 创建 `departments` 和 `employees` 两张表，包含主键、索引和外键
+3. 插入不少于 5 条员工数据
+4. 创建 `reader`、`writer`、`developer` 三个账号
+5. 分别用三个账号登录，验证权限边界
+6. 导出 `employees_lab` 为 SQL 文件
+7. 新建 `employees_lab_restore` 并还原 SQL 文件
+8. 查看当前连接进程、慢查询数量和 binlog 状态
+9. 写出 5 条本机 MySQL 安全加固建议
+10. 说明主从复制中 binlog、复制账号、复制线程和从库延迟的作用
+
+<aside>
+✅
+
+**第 6 课小结**
+
+- 图形化工具提升效率，但不能降低安全要求
+- 数据库维护核心是：权限可控、数据可备、问题可查、故障可恢复
+- 主从复制依赖 binlog、复制账号和复制线程，是热备和读写分离的基础
+- 高可用不是单独技术点，而是建立在备份、日志、复制、监控和权限管理之上
+
+</aside>
+
+---
+
+## 项目总结（一张表复盘）
 
 | 课时 | 核心能力 | 验收点（可检查） |
 | --- | --- | --- |
-| 第 1 课：权限管理 | 管得住人 | 能创建多角色账号并验证权限边界 |
-| 第 2 课：账号生命周期 | 全流程管理 | 能完成锁定/过期/资源限制/删除操作 |
-| 第 3 课：日志排错 | 出事能查 | 能查看错误/慢查询日志，能用 mysqldumpslow 分析 |
-| 第 4 课：安全加固 | 防得住攻击 | 能列出常见攻击与对应防御措施 |
+| 第 1 课：连接与界面 | 会使用 Navicat 管理入口 | 能连接 MySQL，能识别主要功能区 |
+| 第 2 课：建库建表 | 会管理数据库对象 | 能创建库、表、索引、外键并插入数据 |
+| 第 3 课：用户权限 | 会图形化落实最小权限 | 能创建多角色账号并验证权限边界 |
+| 第 4 课：数据维护 | 会导入导出和备份还原 | 能转储 SQL 并还原到测试库 |
+| 第 5 课：监控排错 | 会查看运行状态 | 能查看连接、变量、状态、索引和慢查询数量 |
+| 第 6 课：安全维护 | 会形成维护规范和主从复制认知 | 能列出安全加固清单，并说明主从复制与高可用的关系 |
 
 ---
 
 ## 附录
 
-### 附录 A：密码管理多方式（旧系统兼容，课堂不作为主线）
+### 附录 A：Navicat 常用操作与 SQL 对照表
 
-- MySQL 8.0 推荐：`ALTER USER ... IDENTIFIED BY ...;`
-- `SET PASSWORD ... = PASSWORD()` 为旧语法（8.0 已弃用 PASSWORD()）
-- `mysqladmin` 适用于脚本化，但注意密码泄露风险（命令历史/进程列表）
+| Navicat 操作 | SQL / 工具命令 |
+| --- | --- |
+| 新建数据库 | `CREATE DATABASE ...` |
+| 删除数据库 | `DROP DATABASE ...` |
+| 新建表 | `CREATE TABLE ...` |
+| 设计表 | `ALTER TABLE ...` |
+| 查看表数据 | `SELECT * FROM ...` |
+| 新建用户 | `CREATE USER ...` |
+| 授权 | `GRANT ... ON ... TO ...` |
+| 撤权 | `REVOKE ... ON ... FROM ...` |
+| 锁定账号 | `ALTER USER ... ACCOUNT LOCK` |
+| 转储 SQL 文件 | `mysqldump` 类似功能 |
+| 运行 SQL 文件 | `mysql < backup.sql` 类似功能 |
+| 查看进程 | `SHOW PROCESSLIST` |
+| 查看变量 | `SHOW VARIABLES` |
+| 查看状态 | `SHOW STATUS` |
 
-### 附录 B：InnoDB 与 MyISAM 的差异
+### 附录 B：课堂统一账号建议
 
-| 维度 | InnoDB | MyISAM |
-| --- | --- | --- |
-| 事务支持 | 支持（ACID） | 不支持 |
-| 崩溃恢复 | 自动恢复 | 需手动 REPAIR |
-| 锁粒度 | 行级锁 | 表级锁 |
-| 外键 | 支持 | 不支持 |
-| 全文索引 | 支持（5.6+） | 支持 |
-| MySQL 8.0 默认 | 是 | 否 |
+| 用途 | 用户名 | 主机 | 密码 | 权限 |
+| --- | --- | --- | --- | --- |
+| 管理演示 | `dba` | `192.168.100.%` | `123456` | 课堂可给管理权限 |
+| 只读验证 | `reader` | `192.168.100.%` | `123456` | `SELECT` |
+| 读写验证 | `writer` | `192.168.100.%` | `123456` | `SELECT, INSERT, UPDATE, DELETE` |
+| 开发验证 | `developer` | `192.168.100.%` | `123456` | DML + `CREATE, ALTER, INDEX` |
 
-MySQL 8.0 默认使用 InnoDB，支持事务和崩溃恢复，一般不需要手工修复；MyISAM 是旧引擎，已不适合作为新项目默认选择。
+### 附录 C：备份文件命名规范
+
+建议格式：
+
+```text
+数据库名_用途_日期.sql
+```
+
+示例：
+
+```text
+employees_lab_full_20260512.sql
+employees_lab_before_alter_20260512.sql
+employees_lab_restore_test_20260512.sql
+```
+
+命名要能看出：哪个库、什么用途、哪一天生成。
