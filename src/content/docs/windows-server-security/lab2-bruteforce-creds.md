@@ -438,9 +438,9 @@ rpcclient -U "" 192.168.1.20 -c "enumdomusers"
 # 使用 CrackMapExec / NetExec 进行SMB枚举
 # 注意：Kali 2024+ 中 CrackMapExec 已更名为 NetExec (nxc)
 # 若 crackmapexec 命令不存在，改用 nxc
-crackmapexec smb 192.168.1.20 --users
-crackmapexec smb 192.168.1.20 --groups
-crackmapexec smb 192.168.1.20 --shares
+nxc smb 192.168.1.20 --users
+nxc smb 192.168.1.20 --groups
+nxc smb 192.168.1.20 --shares
 
 # 使用nbtscan获取NetBIOS信息（需先安装：sudo apt install nbtscan）
 nbtscan 192.168.1.20
