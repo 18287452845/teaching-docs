@@ -391,7 +391,10 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RestrictRemoteSAM /t REG_
 Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
 Set-SmbServerConfiguration -RejectUnencryptedAccess $false -Force
 
-# 14. 重启使所有配置生效
+# 14. 关闭 UAC 远程限制（否则管理员账户网络登录时被降权，无法写 ADMIN$ 或调用 WMI）
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f
+
+# 15. 重启使所有配置生效
 Restart-Computer -Force
 ```
 
@@ -753,7 +756,7 @@ Get-CimInstance -ClassName Win32_UserAccount | Where-Object { $_.Name -like '*$*
 
 ```
 # 从Kali使用CrackMapExec检测
-crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' --users
+nxc smb 192.168.1.20 -u weakadmin -p 'admin123' --users
 # 会列出所有用户，包括隐藏的backdoor$
 ```
 
@@ -936,9 +939,13 @@ privilege::debug
     # 8. 恢复空会话限制（阻止匿名枚举）
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RestrictAnonymousSam /t REG_DWORD /d 1 /f
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v EveryoneIncludesAnonymous /t REG_DWORD /d 0 /f
+    reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RestrictRemoteSAM /f
 
     # 9. 禁用 SMB1 协议
     Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+
+    # 10. 恢复 UAC 远程限制
+    reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /f
 
     # 10. 删除Mimikatz等工具
     Remove-Item -Path "C:\Tools" -Recurse -Force
