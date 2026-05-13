@@ -640,7 +640,6 @@ xfreerdp3 /v:192.168.1.20 /u:weakadmin /p:admin123 /cert:tofu
 **步骤7：使用Mimikatz从内存中提取凭据**
 
 在Windows Server靶机上以管理员身份执行：
-
 <aside>
 ⚠️
 
