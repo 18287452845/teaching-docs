@@ -189,7 +189,6 @@ Windows XP/2003         Windows 7/2008R2       Windows 10/2016+
 ```
 
 > **实验关键提示**：本实验覆盖 SMB 和 FTP 两个攻击面。SMB 部分的核心是理解空会话枚举和 SMB 中继攻击（NTLM Relay）的危害；FTP 部分的核心是理解明文传输的安全风险。实验完成后需通过启用 SMB 签名、禁用 SMBv1、关闭匿名枚举等措施进行加固验证。
-> 
 
 ---
 
@@ -208,7 +207,6 @@ Windows XP/2003         Windows 7/2008R2       Windows 10/2016+
 ```
 
 > **注意**：本实验中SMB中继攻击需要目标服务器未启用SMB签名（Windows Server 2025工作组模式默认不启用）。所有实验步骤均可在Windows Server 2025上完成。
-> 
 
 ### 1.2 靶机环境详细配置
 
@@ -325,7 +323,6 @@ rpcclient -U "" 192.168.1.20 -c "enumdomgroups"
 ```
 
 > **知识关联**：对应讲义中”匿名访问控制与枚举防护”——Windows默认允许空会话连接IPC$，可枚举用户和共享。
-> 
 
 **步骤2：枚举共享权限和ACL**
 
@@ -372,7 +369,6 @@ smbclient -L //192.168.1.20 -N -m NT1
 ```
 
 > **知识关联**：对应讲义中”SMB版本演进”——SMBv1已被废弃但旧系统仍默认启用，存在MS17-010等严重漏洞。
-> 
 
 **步骤4：检测SMB签名状态**
 
@@ -410,7 +406,6 @@ crackmapexec smb 192.168.1.0/24 --gen-relay-list relay_targets.txt
 ```
 
 > **知识关联**：对应讲义中”SMB安全”——SMB签名（SMB Signing）通过对消息进行数字签名来防止中间人篡改和NTLM中继攻击。
-> 
 
 ### 阶段三：SMB中继攻击（NTLM Relay）
 
@@ -509,8 +504,7 @@ net use \\192.168.1.10\share /user:Jerry P@ssw0rd123
 目标服务器验签失败 → 拒绝连接。
 ```
 
-> **知识关联**：对应讲义中”SMB安全”——NTLM中继攻击利用SMB签名未启用的弱点，将截获的认证请求转发到目标服务器。启用SMB签名是最有效的防御手段，微软推荐所有Windows服务器启用此功能。
-> 
+> **知识关联**：对应讲义中”SMB安全”——NTLM中继攻击利用SMB签名未启用的弱点，将截获的认证请求转发到目标服务器。启用SMB签名是最有效的防御手段。
 
 ---
 
@@ -572,7 +566,6 @@ ftp 192.168.1.20
 ```
 
 > **知识关联**：对应讲义中”FTP工作原理”——FTP控制通道（21端口）的账号密码为明文传输，可被网络嗅探截获。
-> 
 
 **步骤10：文件上传与目录遍历测试**
 
@@ -634,7 +627,6 @@ smb: \Finance\> put /tmp/test.txt
 ```
 
 > **知识关联**：对应讲义中”共享权限与NTFS权限”——最终有效权限=min(共享权限, NTFS权限)，需验证两者是否正确配置。
-> 
 
 ---
 
@@ -707,26 +699,50 @@ crackmapexec smb 192.168.1.20 --shares
 
 ## 四、实验清理
 
-```cmd
-REM 1. 删除测试用户
+```powershell
+# 1. 删除测试用户和组
 net user Jerry /delete
 net user Tom /delete
 net localgroup 部门A /delete
 net localgroup 部门B /delete
 
-REM 2. 删除共享
+# 2. 删除共享和FTP站点
 net share CompanyShare /delete
+Import-Module WebAdministration
+Remove-WebSite -Name "CompanyFTP"
 
-REM 3. 删除测试目录
-rmdir /s /q C:\SharedFolder
-rmdir /s /q C:\FTPRoot
+# 3. 删除测试目录
+Remove-Item -Recurse -Force C:\SharedFolder
+Remove-Item -Recurse -Force C:\FTPRoot
 
-REM 4. 启用防火墙
-netsh advfirewall set allprofiles state on
+# 4. 恢复SMB签名为默认值
+Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
 
-REM 5. 卸载IIS（可选）
-REM Uninstall-WindowsFeature Web-Server
+# 5. 删除防火墙规则
+Remove-NetFirewallRule -DisplayName "SMB-In"
+Remove-NetFirewallRule -DisplayName "FTP-In"
+Remove-NetFirewallRule -DisplayName "FTP-Data"
+
+# 6. 卸载IIS（可选）
+# Remove-WindowsFeature Web-Server, Web-FTP-Server
 ```
 
-> **免责声明**：本实验仅用于授权的安全教学环境。SMB中继攻击涉及网络协议层面的安全测试，请确保在虚拟机环境中操作。
->
+> **免责声明**：本实验仅用于授权的安全教学环境。SMB中继攻击涉及网络协议层面的安全测试，请确保在隔离的虚拟机环境中操作，切勿在生产网络中执行。
+
+---
+
+## 五、知识链衔接
+
+```
+实验二（本地认证攻击）          实验三（网络服务攻击）          实验四（Web服务攻击）
+─────────────────────         ─────────────────────         ─────────────────────
+NTLM认证流程                   SMB中继（NTLM Relay）          IIS请求管道
+Pass-the-Hash                  SMB匿名枚举                    HTTP方法探测
+SAM/LSASS凭据提取              FTP明文嗅探                    目录遍历/WebShell
+                               共享权限越权                    安全响应头
+
+衔接关系：
+• 实验二的NTLM认证知识 → 实验三SMB中继攻击的理论基础
+• 实验三的FTP服务（IIS组件） → 实验四IIS Web安全审计的前置铺垫
+• 实验三的共享权限模型 → 实验四的NTFS权限与IIS虚拟目录权限对照
+```
