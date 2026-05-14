@@ -1339,7 +1339,6 @@ VALUES ('新生甲', '男', 18, '网络安全', 3.70, '2025-09-01', 'newA@stu.ed
 INSERT INTO students (name, gender, age, major, gpa, enrollment_date, email, phone, address)
 VALUES ('新生乙', '女', 19, '软件工程', 3.85, '2025-09-01', 'newB@stu.edu', '13800008002', '上海市徐汇区');
 
-UPDATE students SET gpa = 3.90 WHERE name = '张三';
 
 -- ⚠️ 10:00 有人误操作，清空了整张表！
 DELETE FROM students;
