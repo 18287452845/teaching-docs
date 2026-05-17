@@ -332,16 +332,23 @@ app.exe 启动 → 搜索 userenv.dll
 ### 实验环境说明
 
 > 本任务的实验操作需要以下环境：
-> - **靶机**：Windows Server 2016/2019/2022（虚拟机，实验前创建快照）
+> - **靶机**：Windows Server 2022/2025（虚拟机，实验前创建快照）
 > - **攻击机**：Kali Linux（安装Metasploit Framework）
 > - **网络**：两台虚拟机处于同一NAT网络，能互相通信
 > - **重要提示**：实验前请关闭Windows Defender实时防护，或将其排除实验目录
+>
+> ⚠️ **Windows Server 2025 特别说明**：
+> - Server 2025 默认启用 **VBS（基于虚拟化的安全）** 和增强版 Windows Defender，关闭实时防护需通过组策略：`gpedit.msc` → 计算机配置 → 管理模板 → Windows 组件 → Microsoft Defender 防病毒 → 实时保护 → 启用"关闭实时保护"策略
+> - 如果组策略无效，还需关闭"篡改防护"：Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 关闭"篡改防护"（必须先关闭此项，组策略才能生效）
+> - Server 2025 的 PowerShell 5.1 仍支持 `Get-WmiObject`，但微软建议使用 `Get-CimInstance` 替代（功能等价，语法略有不同）
 
 ---
 
 ### 实验1：Windows "5次Shift" 粘滞键后门
 
 **原理回顾**：登录界面按5次Shift键启动sethc.exe（以SYSTEM权限运行），将其替换为cmd.exe即可在登录界面获得SYSTEM命令行。
+
+> ⚠️ **Server 2025 兼容性说明**：Windows Server 2025 默认启用 Credential Guard 和 VBS（基于虚拟化的安全），系统文件保护更强。如果 `takeown` 和 `icacls` 命令执行后仍无法替换 sethc.exe，需要在虚拟机设置中关闭 VBS：`bcdedit /set hypervisorlaunchtype off` 并重启，或通过 WinPE 启动盘离线替换文件。教学环境中建议在安装系统时不启用 VBS 功能。
 
 **操作步骤**：
 
@@ -401,7 +408,7 @@ net user backdoor /delete
 2. 找到 `sethc.exe.bak`，右键 → 重命名为 `sethc.exe`（覆盖当前文件）
 3. 如果提示权限不足，右键 `sethc.exe` → 属性 → 安全 → 高级 → 更改所有者为 Administrators
 
-> 🛡️ **最简单有效的防御**：通过组策略禁用登录界面的辅助功能按钮。打开 `gpedit.msc` → 计算机配置 → 管理模板 → 系统 → 登录 → 启用"关闭应用程序事件的辅助功能"。或者直接在注册表中设置：`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe`，新建字符串值 `Debugger`，值为空（阻止 sethc.exe 执行任何程序）。
+> 🛡️ **最简单有效的防御**：通过注册表 IFEO（映像文件执行选项）阻止 sethc.exe 被利用。打开 `regedit`，导航到 `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\`，新建项 `sethc.exe`，在该项下新建字符串值 `Debugger`，数据留空。这样即使 sethc.exe 被替换，系统也不会执行它。同样的方法可应用于 `utilman.exe`、`osk.exe`、`magnify.exe` 等其他辅助功能程序。此方法在 Windows Server 2016~2025 所有版本上均有效。
 
 **防御措施**：
 
@@ -751,6 +758,8 @@ New-NetFirewallRule -DisplayName "WinRM Restrict" -Direction Inbound -Protocol T
 ### 实验6：反弹木马与Meterpreter（msfvenom + Metasploit）
 
 **原理**：反弹Shell（Reverse Shell）是攻击技术中的核心概念。与正向连接不同，反弹Shell由**目标主机主动连接攻击机**，能有效绕过目标主机的入站防火墙规则。
+
+> ⚠️ **Server 2025 兼容性说明**：Windows Server 2025 的 Defender 集成了增强版 AMSI（反恶意软件扫描接口）和智能应用控制，即使关闭实时防护，AMSI 仍可能拦截 PowerShell 类型的 Payload。建议实验时：（1）通过组策略彻底关闭 Defender（参见实验环境说明）；（2）优先使用 EXE 格式木马而非 PowerShell 脚本格式；（3）如仍被拦截，可在 Defender 排除项中添加 `C:\Windows\Temp\` 目录。
 
 ```
 正向连接（Forward Shell）：
@@ -1222,11 +1231,13 @@ WebShell防御四层体系：
 
 **phpStudy** 是集成了Apache/Nginx + PHP + MySQL的Windows集成环境，适合快速搭建PHP运行环境用于安全实验。
 
+> ⚠️ **Server 2025 兼容性说明**：phpStudy 2018 旧版可能在 Windows Server 2025 上出现 VC 运行库兼容性问题。建议使用**小皮面板（phpStudy Pro）最新版**（支持 PHP 5.6~8.x 切换）。Upload-Labs 靶场的部分关卡（如 Pass-11/12 的 00 截断）需要 PHP 5.3 以下版本才能复现，在 PHP 7.x+ 环境中这些漏洞已被修复，课堂演示时可跳过这些关卡或仅做原理讲解。
+
 **操作步骤**：
 
 **第一步：安装phpStudy**
 
-1. 下载phpStudy 2018版本（内置PHP 5.x，便于复现经典漏洞）
+1. 下载小皮面板（phpStudy Pro）最新版，或 phpStudy 2018 版本（内置PHP 5.x，便于复现经典漏洞）
 2. 安装后启动Apache和MySQL服务
 3. 验证：浏览器访问 `http://localhost/`，显示phpStudy默认页面
 
