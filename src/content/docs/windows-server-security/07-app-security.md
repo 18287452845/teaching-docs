@@ -118,14 +118,14 @@ Windows系统中常见的后门类型：
 
 **服务的关键属性**：
 
-| 属性 | 说明 | 用于伪装的技巧 |
-| --- | --- | --- |
-| 服务名称 | 系统内部标识 | 使用类似系统服务的名称，如`WindowsUpdateHelper` |
-| 显示名称 | 服务管理器中显示的名称 | 使用欺骗性的显示名称 |
-| 启动类型 | 自动/手动/禁用 | 设为`auto`（自动）确保开机启动 |
-| 二进制路径 | 服务执行的程序路径 | 指向恶意程序路径 |
-| 描述信息 | 服务描述文本 | 填写看似合法的描述信息 |
-| 运行身份 | 服务运行的账户 | 默认为SYSTEM（最高权限） |
+| 属性    | 说明          | 用于伪装的技巧                            |
+| ----- | ----------- | ---------------------------------- |
+| 服务名称  | 系统内部标识      | 使用类似系统服务的名称，如`WindowsUpdateHelper` |
+| 显示名称  | 服务管理器中显示的名称 | 使用欺骗性的显示名称                         |
+| 启动类型  | 自动/手动/禁用    | 设为`auto`（自动）确保开机启动                 |
+| 二进制路径 | 服务执行的程序路径   | 指向恶意程序路径                           |
+| 描述信息  | 服务描述文本      | 填写看似合法的描述信息                        |
+| 运行身份  | 服务运行的账户     | 默认为SYSTEM（最高权限）                    |
 
 ```
 服务后门的运作机制：
@@ -163,14 +163,14 @@ sc query "WindowsUpdateHelper"
 
 **常用注册表持久化路径**：
 
-| 注册表路径 | 触发时机 | 适用范围 | 检测难度 |
-| --- | --- | --- | --- |
-| `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` | 用户登录时 | 所有用户 | ⭐⭐（易） |
-| `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` | 用户登录时 | 当前用户 | ⭐⭐（易） |
-| `HKLM\...\CurrentVersion\RunOnce` | 下次启动时运行一次 | 所有用户 | ⭐⭐（易） |
-| `HKLM\...\Policies\Explorer\Run` | 用户登录时（策略级） | 所有用户 | ⭐⭐⭐（中） |
-| `HKLM\SYSTEM\CurrentControlSet\Services` | 系统启动 | 服务形式 | ⭐⭐⭐（中） |
-| `HKLM\...\Image File Execution Options` | 指定进程启动时 | 所有用户 | ⭐⭐⭐⭐（难） |
+| 注册表路径                                                | 触发时机       | 适用范围 | 检测难度    |
+| ---------------------------------------------------- | ---------- | ---- | ------- |
+| `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` | 用户登录时      | 所有用户 | ⭐⭐（易）   |
+| `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` | 用户登录时      | 当前用户 | ⭐⭐（易）   |
+| `HKLM\...\CurrentVersion\RunOnce`                    | 下次启动时运行一次  | 所有用户 | ⭐⭐（易）   |
+| `HKLM\...\Policies\Explorer\Run`                     | 用户登录时（策略级） | 所有用户 | ⭐⭐⭐（中）  |
+| `HKLM\SYSTEM\CurrentControlSet\Services`             | 系统启动       | 服务形式 | ⭐⭐⭐（中）  |
+| `HKLM\...\Image File Execution Options`              | 指定进程启动时    | 所有用户 | ⭐⭐⭐⭐（难） |
 
 > 💡 **AppInit_DLLs** 和 **Image File Execution Options (IFEO)** 是更高级的注册表持久化技术。IFEO可以通过设置`Debugger`值来劫持任意进程——当目标程序启动时，实际执行的是攻击者指定的程序。
 
@@ -395,6 +395,14 @@ icacls C:\Windows\System32\sethc.exe /reset
 net user backdoor /delete
 ```
 
+
+**界面方式恢复**：
+1. 打开"文件资源管理器"，导航到 `C:\Windows\System32\`
+2. 找到 `sethc.exe.bak`，右键 → 重命名为 `sethc.exe`（覆盖当前文件）
+3. 如果提示权限不足，右键 `sethc.exe` → 属性 → 安全 → 高级 → 更改所有者为 Administrators
+
+> 🛡️ **最简单有效的防御**：通过组策略禁用登录界面的辅助功能按钮。打开 `gpedit.msc` → 计算机配置 → 管理模板 → 系统 → 登录 → 启用"关闭应用程序事件的辅助功能"。或者直接在注册表中设置：`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe`，新建字符串值 `Debugger`，值为空（阻止 sethc.exe 执行任何程序）。
+
 **防御措施**：
 
 | 防御方法 | 说明 |
@@ -412,6 +420,8 @@ net user backdoor /delete
 
 **第一步：创建注册表后门**
 
+**命令行方式**：
+
 ```powershell
 # 方法一：使用reg命令
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsUpdateHelper" /t REG_SZ /d "C:\Windows\Temp\backdoor.exe" /f
@@ -426,7 +436,24 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
 Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 ```
 
+**界面方式（注册表编辑器）**：
+
+1. 按 `Win+R`，输入 `regedit`，回车打开注册表编辑器
+2. 左侧导航到：`HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
+3. 右侧空白区域右键 → 新建 → 字符串值
+4. 名称输入：`WindowsUpdateHelper`
+5. 双击该值，数据输入：`C:\Windows\Temp\backdoor.exe`
+6. 确定保存，即可看到新增的启动项
+
 **第二步：检测注册表后门**
+
+**界面方式（注册表编辑器）**：
+
+1. 打开 `regedit`，导航到 `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
+2. 右侧面板中逐一检查每个值，关注：名称看似系统服务但路径指向 `Temp`、`AppData` 等非标准目录的项
+3. 同样检查 `RunOnce`、`HKCU\...\Run` 等其他自启动位置
+
+**命令行方式**：
 
 ```powershell
 # 检查所有常见的注册表自启动位置
@@ -450,6 +477,14 @@ foreach ($path in $autorunPaths) {
 
 **第三步：清除注册表后门**
 
+**界面方式（注册表编辑器）**：
+
+1. 打开 `regedit`，导航到 `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
+2. 右键选中可疑的值（如 `WindowsUpdateHelper`）→ 删除
+3. 确认删除
+
+**命令行方式**：
+
 ```powershell
 # 删除恶意启动项
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "WindowsUpdateHelper"
@@ -459,6 +494,8 @@ Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" 
 Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | Format-List
 ```
 
+> 🛡️ **最简单有效的防御**：使用 Windows 自带的 `msconfig`（系统配置）工具。按 `Win+R` 输入 `msconfig` → 切换到"启动"选项卡，可以直观查看并禁用所有自启动项。Windows 10/11 中该功能已整合到"任务管理器"的"启动"选项卡中，右键可直接禁用可疑项。
+
 ---
 
 ### 实验3：系统服务后门
@@ -466,6 +503,8 @@ Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | F
 **操作步骤**：
 
 **第一步：创建服务后门**
+
+**命令行方式**：
 
 ```powershell
 # 创建伪装的系统服务
@@ -478,7 +517,23 @@ sc qc "SystemDiagnostic"
 sc query "SystemDiagnostic"
 ```
 
+**界面方式（服务管理器）**：
+
+1. 按 `Win+R`，输入 `services.msc`，回车打开服务管理器
+2. 查看服务列表，可以看到新创建的 "System Diagnostic Service"
+3. 双击该服务，可查看其属性：启动类型（自动）、可执行文件路径、描述等
+4. 注意观察：该服务的"可执行文件的路径"指向 `C:\Windows\Temp\` 目录——这是明显的异常特征
+
 **第二步：检测可疑服务**
+
+**界面方式（服务管理器）**：
+
+1. 按 `Win+R`，输入 `services.msc`，回车
+2. 点击"启动类型"列标题排序，筛选出所有"自动"启动的服务
+3. 逐一检查：重点关注描述模糊、发布者为空、可执行文件路径指向 `Temp`/`AppData`/`Users` 等非标准目录的服务
+4. 右键可疑服务 → 属性 → 查看"可执行文件的路径"
+
+**命令行方式**：
 
 ```powershell
 # 列出所有自动启动的服务
@@ -509,6 +564,15 @@ Get-WmiObject Win32_Service | ForEach-Object {
 
 **第三步：清除服务后门**
 
+**界面方式（服务管理器）**：
+
+1. 打开 `services.msc`，找到可疑服务 "System Diagnostic Service"
+2. 右键 → 停止（先停止服务运行）
+3. 右键 → 属性 → 启动类型改为"禁用"
+4. 服务管理器无法直接删除服务，需使用命令行 `sc delete` 完成删除
+
+**命令行方式**：
+
 ```powershell
 # 停止并删除恶意服务
 sc stop "SystemDiagnostic"
@@ -518,6 +582,8 @@ sc delete "SystemDiagnostic"
 Remove-Item "C:\Windows\Temp\backdoor.exe" -Force -ErrorAction SilentlyContinue
 ```
 
+> 🛡️ **最简单有效的防御**：启用 Windows Defender 的"篡改防护"（Tamper Protection）功能。打开 Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 开启"篡改防护"。该功能会阻止非授权程序修改安全设置和创建可疑服务。同时，定期使用 `Autoruns`（微软 Sysinternals 工具）检查所有自启动服务。
+
 ---
 
 ### 实验4：计划任务后门
@@ -525,6 +591,8 @@ Remove-Item "C:\Windows\Temp\backdoor.exe" -Force -ErrorAction SilentlyContinue
 **操作步骤**：
 
 **第一步：创建计划任务后门**
+
+**命令行方式**：
 
 ```powershell
 # 开机自启动（SYSTEM权限）
@@ -540,7 +608,28 @@ schtasks /create /tn "UserProfileSync" /tr "C:\Windows\Temp\backdoor.exe" /sc on
 schtasks /query /tn "SystemHealthCheck" /fo LIST /v
 ```
 
+**界面方式（任务计划程序）**：
+
+1. 按 `Win+R`，输入 `taskschd.msc`，回车打开任务计划程序
+2. 左侧选择"任务计划程序库"
+3. 右侧"操作"面板 → 点击"创建基本任务"
+4. 名称输入：`SystemHealthCheck`，描述随意填写，下一步
+5. 触发器选择"计算机启动时"，下一步
+6. 操作选择"启动程序"，程序路径填 `C:\Windows\Temp\backdoor.exe`，下一步
+7. 勾选"打开属性对话框"，完成
+8. 在属性对话框中，勾选"使用最高权限运行"，确定
+
 **第二步：检测可疑计划任务**
+
+**界面方式（任务计划程序）**：
+
+1. 打开 `taskschd.msc`，展开左侧"任务计划程序库"
+2. 逐一检查每个任务：右键 → 属性
+3. 重点关注"操作"选项卡中程序路径指向 `Temp`、`AppData` 等非标准目录的任务
+4. 检查"常规"选项卡中"使用最高权限运行"且作者非 Microsoft 的任务
+5. 检查"触发器"选项卡中设置为"启动时"或"登录时"的可疑任务
+
+**命令行方式**：
 
 ```powershell
 # 列出所有非Microsoft的计划任务
@@ -560,6 +649,14 @@ Get-ScheduledTask | Get-ScheduledTaskInfo | Format-Table TaskName, LastRunTime, 
 
 **第三步：清除计划任务后门**
 
+**界面方式（任务计划程序）**：
+
+1. 打开 `taskschd.msc`，在任务列表中找到可疑任务（如 `SystemHealthCheck`）
+2. 右键该任务 → 删除，确认删除
+3. 重复操作删除其他可疑任务
+
+**命令行方式**：
+
 ```powershell
 # 删除恶意计划任务
 schtasks /delete /tn "SystemHealthCheck" /f
@@ -570,6 +667,8 @@ schtasks /delete /tn "UserProfileSync" /f
 Get-ScheduledTask | Where-Object {$_.TaskName -in @("SystemHealthCheck","DiskCleanupTask","UserProfileSync")} | Select-Object TaskName, State
 ```
 
+> 🛡️ **最简单有效的防御**：通过组策略限制计划任务的创建权限。打开 `gpedit.msc` → 计算机配置 → Windows 设置 → 安全设置 → 本地策略 → 用户权限分配 → "作为批处理作业登录"，仅保留必要的账户。同时开启"对象访问审核"策略，监控计划任务的创建和修改事件（事件ID 4698/4702）。
+
 ---
 
 ### 实验5：WinRM端口复用后门
@@ -577,6 +676,15 @@ Get-ScheduledTask | Where-Object {$_.TaskName -in @("SystemHealthCheck","DiskCle
 **原理回顾**：WinRM（Windows Remote Management）是Windows远程管理服务，默认监听5985(HTTP)/5986(HTTPS)端口，支持PowerShell远程会话。攻击者可以利用已建立的WinRM通道进行隐蔽的远程控制。
 
 **操作步骤**：
+
+**界面方式查看WinRM状态**：
+
+1. 按 `Win+R`，输入 `services.msc`，回车
+2. 找到 "Windows Remote Management (WS-Management)" 服务
+3. 查看其状态（正在运行/已停止）和启动类型
+4. 也可通过 Windows 防火墙界面查看：控制面板 → Windows Defender 防火墙 → 高级设置 → 入站规则 → 查找 "Windows 远程管理" 相关规则
+
+**命令行方式**：
 
 ```powershell
 # ===== 在靶机上执行 =====
@@ -610,6 +718,16 @@ Copy-Item -Path "C:\local\payload.exe" -Destination "C:\Windows\Temp\" -ToSessio
 
 **防御WinRM后门**：
 
+**界面方式（Windows 防火墙）**：
+
+1. 打开"控制面板" → "Windows Defender 防火墙" → "高级设置"
+2. 左侧选择"入站规则"
+3. 找到 "Windows 远程管理 (HTTP-In)" 规则
+4. 右键 → 属性 → "作用域"选项卡 → 远程 IP 地址 → 选择"下列 IP 地址"，仅添加允许的管理 IP
+5. 如果不需要 WinRM，直接右键该规则 → 禁用规则
+
+**命令行方式**：
+
 ```powershell
 # 查看WinRM是否启用
 Get-Service WinRM | Select-Object Name, Status, StartType
@@ -625,6 +743,8 @@ Set-Item WSMan:\localhost\Service\AllowRemoteAccess -Value $true
 # 配置防火墙仅允许指定IP
 New-NetFirewallRule -DisplayName "WinRM Restrict" -Direction Inbound -Protocol TCP -LocalPort 5985 -RemoteAddress 192.168.100.0/24 -Action Allow
 ```
+
+> 🛡️ **最简单有效的防御**：如果服务器不需要远程 PowerShell 管理，直接禁用 WinRM 服务。打开 `services.msc` → 找到 "Windows Remote Management (WS-Management)" → 右键 → 属性 → 启动类型改为"禁用" → 停止服务。这是最直接有效的防御——服务不运行，攻击者就无法利用。
 
 ---
 
@@ -698,6 +818,8 @@ exploit -j
 | `clearev` | 清除事件日志 | 销毁入侵证据（违法！） |
 
 > 💡 **migrate命令的重要性**：木马进程（如backdoor.exe）非常容易被用户或杀软发现并终止。使用`migrate`将Meterpreter会话迁移到一个合法的、长期运行的进程（如explorer.exe、svchost.exe）中，可以大幅提高隐蔽性和存活率。
+
+> 🛡️ **最简单有效的防御**：开启 Windows Defender 实时防护并保持病毒定义更新。打开 Windows 安全中心 → 病毒和威胁防护 → 确保"实时保护"和"云提供的保护"均已开启。Windows Defender 能检测绝大多数 msfvenom 生成的标准 Payload。同时，通过 Windows 防火墙限制出站连接：控制面板 → Windows Defender 防火墙 → 高级设置 → 出站规则 → 新建规则 → 阻止非必要程序的出站连接（尤其是 `C:\Windows\Temp\` 目录下的程序），可有效阻断反弹 Shell 的回连通道。
 
 ---
 
@@ -1179,6 +1301,8 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 
 > 💡 **前端验证为什么不安全？** 因为前端JavaScript运行在用户的浏览器中，用户完全可以绕过、修改或禁用前端代码。所有安全验证**必须在服务器端重复执行**。前端验证只是提升用户体验（快速提示），不能作为安全防线。
 
+> 🛡️ **最简单有效的防御**：在 IIS 中对上传目录（如 `upload`）禁止脚本执行权限。打开 IIS 管理器 → 展开网站 → 右键 `upload` 目录 → 处理程序映射 → 编辑功能权限 → **取消勾选"脚本"** → 确定。这样即使攻击者成功上传了 WebShell 文件，服务器也不会执行它，只会将其作为纯文本返回——从根本上阻断 WebShell 的利用链。
+
 ---
 
 ### 实验10：利用WebShell管理工具连接
@@ -1203,6 +1327,8 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 4. 通信全程加密，WAF和IDS无法通过特征匹配检测
 
 > 🔍 **检测冰蝎的思路**：虽然内容加密，但可以检测**流量行为特征**——如请求大小固定模式、通信周期规律、POST到动态脚本的频率异常等。基于AI的流量分析工具可以识别这些模式。
+
+> 🛡️ **最简单有效的防御**：部署 WAF（Web 应用防火墙）拦截 WebShell 连接流量。对于免费方案，可使用 IIS 的"IP 和域限制"功能：IIS 管理器 → 网站 → IP 地址和域限制 → 添加拒绝条目，仅允许可信 IP 访问管理后台和上传目录。同时，定期使用 D 盾（免费工具）扫描 Web 目录，它能识别绝大多数已知 WebShell 特征。
 
 ---
 
@@ -1265,6 +1391,34 @@ if ($results.Count -gt 0) {
 ```
 
 #### 方法二：IIS安全加固防止WebShell
+
+**界面方式（IIS 管理器）**：
+
+**操作1：上传目录禁止脚本执行（最关键）**
+
+1. 打开 IIS 管理器（`Win+R` 输入 `inetmgr`）
+2. 左侧展开网站，找到上传目录（如 `upload`）
+3. 双击该目录，中间面板双击"处理程序映射"
+4. 右侧"操作"面板 → 点击"编辑功能权限"
+5. **取消勾选"脚本"**，仅保留"读取"
+6. 确定保存
+
+**操作2：配置请求筛选拒绝危险扩展名**
+
+1. 选中上传目录，双击"请求筛选"
+2. 切换到"文件扩展名"选项卡
+3. 右侧"操作" → "拒绝文件扩展名"
+4. 依次添加：`.php`、`.asp`、`.aspx`、`.jsp`、`.exe`、`.bat`
+5. 确定保存
+
+**操作3：限制上传文件大小**
+
+1. 选中网站根节点，双击"请求筛选"
+2. 右侧"操作" → "编辑功能设置"
+3. "允许的最大内容长度"设为 `1048576`（1MB）
+4. 确定保存
+
+**命令行方式**：
 
 ```powershell
 # ============================================
