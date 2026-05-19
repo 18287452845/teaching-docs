@@ -946,6 +946,41 @@ SHOW VARIABLES LIKE 'relay_log';
 SHOW VARIABLES LIKE 'read_only';
 ```
 
+<aside>
+⚠️
+
+**克隆虚拟机必做：删除 `auto.cnf` 重新生成 UUID**
+
+如果从库是通过克隆主库虚拟机得到的，两台机器的 MySQL `server_uuid` 会完全相同。复制启动时会报错：
+
+```text
+Fatal error: The replica I/O thread stops because source and replica have
+equal MySQL server UUIDs; these UUIDs must be different for replication to work.
+```
+
+`server_uuid` 存储在数据目录下的 `auto.cnf` 文件中，克隆虚拟机时被原样复制过来。解决方法是在**从库**删除该文件并重启，MySQL 会自动生成新的 UUID：
+
+```bash
+# 停止 MySQL
+sudo systemctl stop mysql
+
+# 删除 auto.cnf（MySQL 重启时会自动生成新 UUID）
+sudo rm /var/lib/mysql/auto.cnf
+
+# 重启 MySQL
+sudo systemctl start mysql
+```
+
+重启后验证两边 UUID 已不同（分别在主库和从库执行）：
+
+```sql
+SHOW VARIABLES LIKE 'server_uuid';
+```
+
+确认两台机器的 UUID 不同后，再继续后续步骤。
+
+</aside>
+
 #### 第三步：在主库创建复制账号
 
 在主库执行（如果项目五已降低密码策略则可直接创建）：
@@ -1190,7 +1225,7 @@ Navicat 主要用于图形化观察和验证：
 1. 在 Navicat 中分别建立主库连接（`MySQL-Primary`）和从库连接（`MySQL-Replica`）
 2. 在主库连接中打开 `employees_lab.departments` 表，插入一行新数据
 3. 切换到从库连接，刷新同一张表，确认数据是否同步出现
-4. 在从库查询窗口执行 `SHOW REPLICA STATUS\G`
+4. 在从库查询窗口执行 `SHOW REPLICA STATUS
 5. 查看 `Replica_IO_Running`、`Replica_SQL_Running` 和延迟字段
 
 #### 主从复制搭建流程总结
