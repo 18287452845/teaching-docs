@@ -824,13 +824,13 @@ SHOW GLOBAL STATUS LIKE 'Slow_queries';
 
 #### 搭建前必须满足的条件
 
-| 条件 | 检查方式 | 说明 |
-| --- | --- | --- |
-| 主库开启 binlog | `SHOW VARIABLES LIKE 'log_bin';` | 必须为 `ON` |
-| 主从 `server_id` 不同 | `SHOW VARIABLES LIKE 'server_id';` | 每台 MySQL 必须唯一 |
-| 主库允许从库访问 3306 | 防火墙 / 安全组 / 网络连通性检查 | 从库要能连到主库 |
-| 存在复制账号 | `SHOW GRANTS FOR 'repl'@'192.168.100.%';` | 只授予复制权限 |
-| 初始数据一致 | 全量备份还原到从库 | 否则复制起点不一致 |
+| 条件                | 检查方式                                      | 说明            |
+| ----------------- | ----------------------------------------- | ------------- |
+| 主库开启 binlog       | `SHOW VARIABLES LIKE 'log_bin';`          | 必须为 `ON`      |
+| 主从 `server_id` 不同 | `SHOW VARIABLES LIKE 'server_id';`        | 每台 MySQL 必须唯一 |
+| 主库允许从库访问 3306     | 防火墙 / 安全组 / 网络连通性检查                       | 从库要能连到主库      |
+| 存在复制账号            | `SHOW GRANTS FOR 'repl'@'192.168.100.%';` | 只授予复制权限       |
+| 初始数据一致            | 全量备份还原到从库                                 | 否则复制起点不一致     |
 
 复制账号示例：
 
@@ -846,9 +846,247 @@ GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.168.100.%';
 
 </aside>
 
-#### 从库复制状态怎么看
+#### 课堂环境规划
 
-在从库执行：
+本次实验使用两台 Ubuntu 虚拟机模拟主从环境：
+
+| 角色 | 主机名 | IP 地址 | server_id | 说明 |
+| --- | --- | --- | --- | --- |
+| 主库（Source） | mysql-primary | `192.168.100.20` | 1 | 项目五已有的 MySQL 实例 |
+| 从库（Replica） | mysql-replica | `192.168.100.21` | 2 | 克隆或新建一台虚拟机 |
+
+<aside>
+💬
+
+**没有第二台虚拟机怎么办？**
+
+可以克隆项目五的虚拟机，修改 IP 和 `server_id` 即可。克隆后记得修改主机名和网络配置，避免 IP 冲突。
+
+</aside>
+
+#### 第一步：配置主库（192.168.100.20）
+
+在主库 Ubuntu 上编辑 MySQL 配置文件：
+
+```bash
+sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
+```
+
+在 `[mysqld]` 段中确认或添加以下配置：
+
+```ini
+[mysqld]
+server-id = 1
+log_bin = /var/log/mysql/mysql-bin
+binlog_format = ROW
+bind-address = 0.0.0.0
+```
+
+配置说明：
+
+| 参数 | 值 | 作用 |
+| --- | --- | --- |
+| `server-id` | `1` | 主库唯一标识，集群内不能重复 |
+| `log_bin` | `/var/log/mysql/mysql-bin` | 开启 binlog 并指定路径前缀 |
+| `binlog_format` | `ROW` | 推荐行级复制，数据一致性最好 |
+| `bind-address` | `0.0.0.0` | 允许远程连接（从库需要连入） |
+
+保存后重启 MySQL：
+
+```bash
+sudo systemctl restart mysql
+```
+
+验证配置生效：
+
+```sql
+SHOW VARIABLES LIKE 'server_id';
+SHOW VARIABLES LIKE 'log_bin';
+SHOW VARIABLES LIKE 'binlog_format';
+```
+
+#### 第二步：配置从库（192.168.100.21）
+
+在从库 Ubuntu 上编辑同样的配置文件：
+
+```bash
+sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
+```
+
+在 `[mysqld]` 段中确认或添加：
+
+```ini
+[mysqld]
+server-id = 2
+relay_log = /var/log/mysql/mysql-relay
+read_only = ON
+bind-address = 0.0.0.0
+```
+
+配置说明：
+
+| 参数 | 值 | 作用 |
+| --- | --- | --- |
+| `server-id` | `2` | 从库唯一标识，必须和主库不同 |
+| `relay_log` | `/var/log/mysql/mysql-relay` | 中继日志路径前缀 |
+| `read_only` | `ON` | 从库设为只读，防止误写入 |
+| `bind-address` | `0.0.0.0` | 允许 Navicat 远程连接查看状态 |
+
+保存后重启 MySQL：
+
+```bash
+sudo systemctl restart mysql
+```
+
+验证配置生效：
+
+```sql
+SHOW VARIABLES LIKE 'server_id';
+SHOW VARIABLES LIKE 'relay_log';
+SHOW VARIABLES LIKE 'read_only';
+```
+
+#### 第三步：在主库创建复制账号
+
+在主库执行（如果项目五已降低密码策略则可直接创建）：
+
+```sql
+-- 创建复制专用账号
+CREATE USER 'repl'@'192.168.100.%' IDENTIFIED WITH mysql_native_password BY '123456';
+GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.168.100.%';
+FLUSH PRIVILEGES;
+
+-- 验证账号权限
+SHOW GRANTS FOR 'repl'@'192.168.100.%';
+```
+
+在从库测试能否用该账号连接主库：
+
+```bash
+mysql -h 192.168.100.20 -u repl -p123456 -e "SELECT 1;"
+```
+
+如果连接失败，检查：
+1. 主库防火墙是否放行 3306 端口：`sudo ufw allow 3306`
+2. 主库 `bind-address` 是否为 `0.0.0.0`
+3. 账号的 host 是否匹配从库 IP
+
+#### 第四步：备份主库数据并还原到从库
+
+主从复制要求从库的初始数据和主库一致。使用 `mysqldump` 做全量备份：
+
+在主库执行：
+
+```sql
+-- 锁定主库并记录 binlog 位置
+FLUSH TABLES WITH READ LOCK;
+SHOW BINARY LOG STATUS;
+```
+
+记录输出中的两个关键值（后面配置从库要用）：
+
+```text
++------------------+----------+
+| File             | Position |
++------------------+----------+
+| mysql-bin.000003 |      857 |
++------------------+----------+
+```
+
+<aside>
+⚠️
+
+**务必记录 File 和 Position！** 这两个值告诉从库"从哪里开始抄"。记错或漏记会导致复制数据不一致。
+
+</aside>
+
+打开另一个终端窗口，执行全量备份：
+
+```bash
+sudo mysqldump -u root -p123456 --all-databases --source-data=2 > /tmp/full_backup.sql
+```
+
+备份完成后，回到第一个终端解锁主库：
+
+```sql
+UNLOCK TABLES;
+```
+
+将备份文件传输到从库：
+
+```bash
+scp /tmp/full_backup.sql admin@192.168.100.21:/tmp/
+```
+
+在从库还原备份：
+
+```bash
+mysql -u root -p123456 < /tmp/full_backup.sql
+```
+
+<aside>
+💬
+
+**为什么要先备份再配置复制？**
+
+从库必须有和主库一样的初始数据，复制只同步"从某个 binlog 位置之后"的增量变更。如果初始数据不一致，后续复制的数据也会错乱。
+
+</aside>
+
+#### 第五步：在从库配置并启动复制
+
+在从库 MySQL 中执行以下命令，将第四步记录的 File 和 Position 填入：
+
+```sql
+CHANGE REPLICATION SOURCE TO
+    SOURCE_HOST = '192.168.100.20',
+    SOURCE_USER = 'repl',
+    SOURCE_PASSWORD = '123456',
+    SOURCE_LOG_FILE = 'mysql-bin.000003',
+    SOURCE_LOG_POS = 857,
+    SOURCE_PORT = 3306;
+```
+
+参数说明：
+
+| 参数 | 含义 |
+| --- | --- |
+| `SOURCE_HOST` | 主库 IP 地址 |
+| `SOURCE_USER` | 复制账号用户名 |
+| `SOURCE_PASSWORD` | 复制账号密码 |
+| `SOURCE_LOG_FILE` | 第四步记录的 binlog 文件名 |
+| `SOURCE_LOG_POS` | 第四步记录的 binlog 位置 |
+| `SOURCE_PORT` | 主库端口 |
+
+启动复制：
+
+```sql
+START REPLICA;
+```
+
+<aside>
+⚠️
+
+**旧版本命令对照**
+
+MySQL 8.0.22 之前使用旧语法，课堂可能在旧资料中看到：
+
+| 新语法（推荐） | 旧语法 |
+| --- | --- |
+| `CHANGE REPLICATION SOURCE TO` | `CHANGE MASTER TO` |
+| `SOURCE_HOST` | `MASTER_HOST` |
+| `SOURCE_LOG_FILE` | `MASTER_LOG_FILE` |
+| `SOURCE_LOG_POS` | `MASTER_LOG_POS` |
+| `START REPLICA` | `START SLAVE` |
+| `SHOW REPLICA STATUS` | `SHOW SLAVE STATUS` |
+
+两种写法功能完全相同，课堂统一使用新语法。
+
+</aside>
+
+#### 第六步：验证复制状态
+
+启动复制后，在从库立即检查状态：
 
 ```sql
 SHOW REPLICA STATUS\G
@@ -864,24 +1102,118 @@ SHOW REPLICA STATUS\G
 | `Last_IO_Error` | 应为空 | 拉取日志错误原因 |
 | `Last_SQL_Error` | 应为空 | 回放日志错误原因 |
 
+**两个 Running 都是 Yes 才算复制正常。** 如果有一个是 No，看对应的 Error 字段排查原因。
+
 MySQL 8.0 中推荐使用 `REPLICA` 术语；旧资料里常见 `SLAVE`，含义基本对应。课堂看到旧命令时要能认出来，例如 `SHOW SLAVE STATUS\G` 是旧写法。
+
+<aside>
+🔧
+
+**常见复制启动失败排错**
+
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| `Replica_IO_Running: No` | 从库连不上主库 | 检查网络、防火墙、复制账号密码 |
+| `Replica_IO_Running: Connecting` | 正在尝试连接 | 等几秒再查；若持续则检查主库 IP 和端口 |
+| `Replica_SQL_Running: No` | 回放 SQL 出错 | 查看 `Last_SQL_Error`，通常是数据冲突 |
+| `Last_IO_Error` 提示认证失败 | 账号或密码错误 | 停止复制，重新 `CHANGE REPLICATION SOURCE TO` |
+| `Last_IO_Error` 提示找不到 binlog | File 或 Position 填错 | 回主库重新 `SHOW BINARY LOG STATUS` 确认 |
+
+修复后重新启动复制的流程：
+
+```sql
+-- 停止复制
+STOP REPLICA;
+
+-- 重新配置（修正错误参数）
+CHANGE REPLICATION SOURCE TO
+    SOURCE_HOST = '192.168.100.20',
+    SOURCE_USER = 'repl',
+    SOURCE_PASSWORD = '123456',
+    SOURCE_LOG_FILE = 'mysql-bin.000003',
+    SOURCE_LOG_POS = 857,
+    SOURCE_PORT = 3306;
+
+-- 重新启动
+START REPLICA;
+
+-- 再次检查
+SHOW REPLICA STATUS\G
+```
+
+</aside>
+
+#### 第七步：实际数据同步测试
+
+复制状态正常后，做一次写入测试验证数据确实能同步。
+
+在**主库**执行写入：
+
+```sql
+-- 在主库插入测试数据
+INSERT INTO employees_lab.departments VALUES ('d005', '测试部-主从验证', NOW());
+
+-- 确认主库已写入
+SELECT * FROM employees_lab.departments WHERE dept_id = 'd005';
+```
+
+在**从库**查询验证（等待 1-2 秒）：
+
+```sql
+-- 在从库查询，应该能看到刚才主库写入的数据
+SELECT * FROM employees_lab.departments WHERE dept_id = 'd005';
+```
+
+如果从库能查到 `d005` 这条记录，说明主从复制工作正常。
+
+再验证从库的只读保护：
+
+```sql
+-- 在从库尝试写入，应该被拒绝（因为配置了 read_only）
+INSERT INTO employees_lab.departments VALUES ('d006', '从库写入测试', NOW());
+-- 预期报错：The MySQL server is running with the --read-only option
+```
+
+<aside>
+💬
+
+**为什么从库要设置 read_only？**
+
+如果从库也能写入，就会出现主从数据不一致。从库的职责是"只抄不写"，`read_only = ON` 从配置层面防止误操作。注意 `read_only` 对 `SUPER` 权限用户无效，生产环境可用 `super_read_only = ON` 进一步限制。
+
+</aside>
 
 #### Navicat 中如何辅助查看主从状态
 
 Navicat 主要用于图形化观察和验证：
 
-1. 分别建立主库连接和从库连接
-2. 在主库执行写入测试，例如向 `employees_lab.departments` 插入一行
-3. 在从库刷新表数据，确认数据是否同步出现
+1. 在 Navicat 中分别建立主库连接（`MySQL-Primary`）和从库连接（`MySQL-Replica`）
+2. 在主库连接中打开 `employees_lab.departments` 表，插入一行新数据
+3. 切换到从库连接，刷新同一张表，确认数据是否同步出现
 4. 在从库查询窗口执行 `SHOW REPLICA STATUS\G`
-5. 查看 `Replica_IO_Running`、`Replica_SQL_Running` 和错误字段
+5. 查看 `Replica_IO_Running`、`Replica_SQL_Running` 和延迟字段
+
+#### 主从复制搭建流程总结
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│  主从复制搭建六步法                                       │
+├─────────────────────────────────────────────────────────┤
+│  1. 配置主库：server-id + log_bin + binlog_format        │
+│  2. 配置从库：server-id + relay_log + read_only          │
+│  3. 主库创建复制账号：REPLICATION SLAVE 权限              │
+│  4. 主库全量备份 → 传输 → 从库还原（保证初始数据一致）    │
+│  5. 从库 CHANGE REPLICATION SOURCE TO（填 File + Pos）   │
+│  6. START REPLICA → SHOW REPLICA STATUS 验证双 Yes       │
+└─────────────────────────────────────────────────────────┘
+```
 
 <aside>
 ✅
 
 **课堂掌握到这里即可**
 
-本项目不要求完整搭建生产级主从集群，但要理解：项目五的 binlog 是复制基础；项目六的备份还原用于准备从库初始数据；Navicat 可以辅助验证数据是否同步、复制线程是否正常。
+本项目不要求完整搭建生产级主从集群，但要理解：项目五的 binlog 是复制基础；项目六的备份还原用于准备从库初始数据；Navicat 可以辅助验证数据是否同步、复制线程是否正常。能按六步法说出搭建流程、能看懂 `SHOW REPLICA STATUS` 输出，即为达标。
 
 </aside>
 
@@ -905,9 +1237,7 @@ Navicat 主要用于图形化观察和验证：
 
 </aside>
 
-### 6.7 期末维护演练任务
-
-完成以下综合任务：
+### 6.7完成以下综合任务：
 
 1. 用 Navicat 新建 `employees_lab` 数据库
 2. 创建 `departments` 和 `employees` 两张表，包含主键、索引和外键
