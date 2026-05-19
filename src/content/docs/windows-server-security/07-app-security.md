@@ -429,6 +429,13 @@ net user backdoor /delete
 
 **第一步：创建注册表后门**
 
+> 💡 **说明**：注册表Run键只是记录"登录时执行什么程序"，即使目标程序不存在，注册表项也能成功创建。本实验重点是学习注册表后门的创建、检测和清除流程。我们先创建一个模拟程序用于验证。
+
+```powershell
+# 创建模拟后门程序（仅写日志，无恶意行为）
+Set-Content -Path "C:\Windows\Temp\backdoor.exe" -Value "echo backdoor > C:\Windows\Temp\backdoor.log" -Encoding ASCII
+```
+
 **命令行方式**：
 
 ```powershell
