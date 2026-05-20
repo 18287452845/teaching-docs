@@ -1015,7 +1015,12 @@ mysql -h 192.168.100.20 -u repl -p123456 -e "SELECT 1;"
 ```sql
 -- 锁定主库并记录 binlog 位置
 FLUSH TABLES WITH READ LOCK;
-SHOW BINARY LOG STATUS;
+```sql
+SHOW BINARY LOGS;
+
+-- 查看当前正在写入的 binlog 文件及位置
+SHOW MASTER STATUS;
+```
 ```
 
 记录输出中的两个关键值（后面配置从库要用）：
@@ -1024,7 +1029,7 @@ SHOW BINARY LOG STATUS;
 +------------------+----------+
 | File             | Position |
 +------------------+----------+
-| mysql-bin.000003 |      857 |
+| mysql-bin.000014 |      849 |
 +------------------+----------+
 ```
 
@@ -1074,11 +1079,11 @@ mysql -u root -p123456 < /tmp/full_backup.sql
 
 ```sql
 CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST = '192.168.100.20',
+    SOURCE_HOST = '192.168.1.136',
     SOURCE_USER = 'repl',
     SOURCE_PASSWORD = '123456',
-    SOURCE_LOG_FILE = 'mysql-bin.000003',
-    SOURCE_LOG_POS = 857,
+    SOURCE_LOG_FILE = 'mysql-bin.000014',
+    SOURCE_LOG_POS = 849,
     SOURCE_PORT = 3306;
 ```
 
@@ -1124,18 +1129,18 @@ MySQL 8.0.22 之前使用旧语法，课堂可能在旧资料中看到：
 启动复制后，在从库立即检查状态：
 
 ```sql
-SHOW REPLICA STATUS\G
+SHOW REPLICA STATUS;
 ```
 
 重点看这些字段：
 
-| 字段 | 正常值 / 关注点 | 含义 |
-| --- | --- | --- |
-| `Replica_IO_Running` | `Yes` | 从库能否连接主库并拉取日志 |
-| `Replica_SQL_Running` | `Yes` | 从库能否正常回放日志 |
-| `Seconds_Behind_Source` | 越小越好 | 从库落后主库多少秒 |
-| `Last_IO_Error` | 应为空 | 拉取日志错误原因 |
-| `Last_SQL_Error` | 应为空 | 回放日志错误原因 |
+| 字段                      | 正常值 / 关注点 | 含义            |
+| ----------------------- | --------- | ------------- |
+| `Replica_IO_Running`    | `Yes`     | 从库能否连接主库并拉取日志 |
+| `Replica_SQL_Running`   | `Yes`     | 从库能否正常回放日志    |
+| `Seconds_Behind_Source` | 越小越好      | 从库落后主库多少秒     |
+| `Last_IO_Error`         | 应为空       | 拉取日志错误原因      |
+| `Last_SQL_Error`        | 应为空       | 回放日志错误原因      |
 
 **两个 Running 都是 Yes 才算复制正常。** 如果有一个是 No，看对应的 Error 字段排查原因。
 
