@@ -1029,7 +1029,7 @@ SHOW MASTER STATUS;
 +------------------+----------+
 | File             | Position |
 +------------------+----------+
-| mysql-bin.000014 |      848 |
+| mysql-bin.000013 |      849 |
 +------------------+----------+
 ```
 
@@ -1082,8 +1082,8 @@ CHANGE REPLICATION SOURCE TO
     SOURCE_HOST = '192.168.1.136',
     SOURCE_USER = 'repl',
     SOURCE_PASSWORD = '123456',
-    SOURCE_LOG_FILE = 'mysql-bin.000014',
-    SOURCE_LOG_POS = 848,
+    SOURCE_LOG_FILE = 'mysql-bin.000013',
+    SOURCE_LOG_POS = 849,
     SOURCE_PORT = 3306;
 ```
 
