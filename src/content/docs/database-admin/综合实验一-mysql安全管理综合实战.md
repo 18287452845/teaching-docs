@@ -411,6 +411,43 @@ DROP TABLE ecommerce.orders;
 -- 预期：ERROR 1142
 ```
 
+#### 补充验证：存储过程的 EXECUTE 权限
+
+先由 DBA 创建一个简单的存储过程，再授权给 dev_user 执行：
+
+```sql
+-- 用 dba_admin 连接，创建存储过程
+DELIMITER //
+CREATE PROCEDURE ecommerce.get_order_count(IN p_status INT)
+BEGIN
+    SELECT COUNT(*) AS '订单数量' FROM orders WHERE order_status = p_status;
+END //
+DELIMITER ;
+
+-- 授权 dev_user 执行该存储过程
+GRANT EXECUTE ON PROCEDURE ecommerce.get_order_count TO 'dev_user'@'192.168.100.%';
+```
+
+切换到 dev_user 连接验证：
+
+```sql
+-- 应成功：已获得 EXECUTE 权限
+CALL ecommerce.get_order_count(1);
+
+-- 应失败：没有 GRANT OPTION，无法再授权给别人
+GRANT EXECUTE ON PROCEDURE ecommerce.get_order_count TO 'analyst'@'192.168.100.%';
+-- 预期：ERROR 1044
+```
+
+<aside>
+💬
+
+**GRANT EXECUTE 权限的意义**
+
+生产环境中，开发账号通常不能直接操作业务表数据，而是通过存储过程封装的业务逻辑来操作。这时需要单独授予 `EXECUTE ON PROCEDURE` 权限，让账号只能"按流程执行"而不能"随意读写"。
+
+</aside>
+
 <aside>
 ✅
 

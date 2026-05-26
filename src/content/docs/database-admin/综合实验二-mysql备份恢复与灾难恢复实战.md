@@ -557,17 +557,74 @@ fi
 find "$BACKUP_DIR" -name "${DB_NAME}_*.sql" -mtime +$KEEP_DAYS -delete
 ```
 
-配置定时任务：
+配置定时任务（课堂实操）：
 
 ```bash
-# 添加执行权限
-sudo chmod +x mysql_backup.sh
+# 第 1 步：将脚本保存到固定位置
+sudo mkdir -p /opt/scripts
+sudo nano /opt/scripts/mysql_backup.sh
+# 将上面的备份脚本内容粘贴进去，保存退出
 
-# 添加 cron 任务（每天凌晨 2 点执行）
+# 第 2 步：赋予执行权限
+sudo chmod +x /opt/scripts/mysql_backup.sh
+
+# 第 3 步：手动测试一次（确认脚本能正常运行）
+sudo /opt/scripts/mysql_backup.sh
+ls -lh /backup/full/
+
+# 第 4 步：配置 cron 定时任务
 sudo crontab -e
-# 添加以下行：
-# 0 2 * * * /path/to/mysql_backup.sh
 ```
+
+在 crontab 编辑器中添加以下内容：
+
+```cron
+# 每天凌晨 2:00 自动备份 ecommerce 数据库
+0 2 * * * /opt/scripts/mysql_backup.sh >> /var/log/mysql_backup.log 2>&1
+```
+
+保存退出后验证 cron 是否生效：
+
+```bash
+# 查看当前用户的定时任务列表
+sudo crontab -l
+
+# 确认 cron 服务正在运行
+sudo systemctl status cron
+```
+
+cron 时间格式速查：
+
+| 字段 | 含义 | 取值范围 |
+| --- | --- | --- |
+| 第 1 个 `0` | 分钟 | 0 ~ 59 |
+| 第 2 个 `2` | 小时 | 0 ~ 23 |
+| 第 3 个 `*` | 日 | 1 ~ 31 |
+| 第 4 个 `*` | 月 | 1 ~ 12 |
+| 第 5 个 `*` | 星期 | 0 ~ 7（0 和 7 都是周日） |
+
+常见 cron 示例：
+
+```cron
+# 每天凌晨 2 点执行
+0 2 * * *
+
+# 每周日凌晨 3 点执行
+0 3 * * 0
+
+# 每 6 小时执行一次
+0 */6 * * *
+
+# 每月 1 日凌晨 1 点执行
+0 1 1 * *
+```
+
+<aside>
+💬
+
+**课堂任务**：将 cron 时间改为 `*/2 * * * *`（每 2 分钟执行一次），观察备份日志是否有输出，验证后再改回 `0 2 * * *`。这是验证 cron 是否真正生效的最快方法。
+
+</aside>
 
 <aside>
 ⚠️
@@ -577,6 +634,7 @@ sudo crontab -e
 1. 备份文件不能只放在数据库服务器上，至少要同步到另一台机器或对象存储
 2. 定期手动验证备份可还原——自动化备份不能自动化验证是常见管理漏洞
 3. 备份脚本中的数据库密码应使用 MySQL 选项文件（`~/.my.cnf`）存储，避免明文暴露在脚本中
+4. cron 日志可通过 `grep CRON /var/log/syslog` 查看执行记录
 
 </aside>
 
