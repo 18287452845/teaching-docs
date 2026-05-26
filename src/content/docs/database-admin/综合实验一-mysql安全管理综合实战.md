@@ -25,7 +25,7 @@ title: "综合实验一 MySQL 数据库安全管理综合实战"
 
 **实验拓扑**
 
-- 虚拟机（VM）：Ubuntu 24.04 LTS，运行 MySQL 8.0（IP：`192.168.100.20`）
+- 虚拟机（VM）：Ubuntu 22.04 LTS，运行 MySQL 8.0（IP：`192.168.100.20`）
 - 宿主机（Windows）：使用 Navicat 远程连接虚拟机中的 MySQL
 - 所有密码统一使用 `123456`（课堂环境）
 
@@ -67,7 +67,32 @@ title: "综合实验一 MySQL 数据库安全管理综合实战"
 
 </aside>
 
-#### 第 2 步：系统更新与时间校准
+#### 第 2 步：更换 APT 软件源
+
+<aside>
+🪞
+
+默认的 Ubuntu 软件源服务器在国外，下载速度较慢。替换为国内镜像源（以阿里云为例）可大幅提升 `apt install` 速度。
+
+</aside>
+
+```bash
+# 备份原始源文件
+sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+
+# 替换为阿里云镜像源（Ubuntu 22.04 Jammy）
+sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+deb https://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb https://mirrors.aliyun.com/ubuntu/ jammy-backports main restricted universe multiverse
+EOF
+
+# 更新软件包索引
+sudo apt update
+```
+
+#### 第 3 步：系统更新与时间校准
 
 ```bash
 # 更新系统
