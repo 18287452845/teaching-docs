@@ -33,7 +33,7 @@ title: "07.项目七 Windows应用安全"
 | 层次 | 内容 |
 | --- | --- |
 | 知识 | 理解后门（Backdoor）的定义、分类与工作原理；掌握Windows系统中常见的持久化技术（注册表、计划任务、服务、WMI、粘滞键）；理解WebShell的分类、工作原理与文件上传漏洞利用链；了解木马的分类与反弹Shell的通信原理 |
-| 技能 | 能够创建和检测各类Windows持久化后门；能够综合排查系统中的常见启动项与自启动位置；能够上传WebShell并利用其执行远程命令；能够使用PowerShell脚本检测和清除各类后门；能够对IIS进行WebShell防护加固 |
+| 技能 | 能够创建和检测各类Windows持久化后门；能够综合排查系统中的常见启动项与自启动位置；能够上传WebShell并利用其执行远程命令；能够使用PowerShell脚本检测和清除各类后门；能够对phpStudy/Apache环境进行WebShell防护加固 |
 | 素养 | 树立"知攻善防"的安全意识，理解攻防对抗的本质；强化法律意识，明确未授权渗透测试的法律后果；培养应急响应思维——发现后门后如何系统化清除 |
 
 ---
@@ -43,7 +43,7 @@ title: "07.项目七 Windows应用安全"
 | 类型 | 内容 | 说明 |
 | --- | --- | --- |
 | 重点 | Windows常见持久化技术的原理与实现 | 注册表Run键、计划任务、系统服务、WMI事件订阅、粘滞键替换——理解每种技术的触发机制和运行原理是检测和防御的基础 |
-| 重点 | WebShell的分类与一句话木马工作原理 | 理解小马/大马/一句话木马的区别，以及客户端（菜刀/冰蝎/哥斯拉）如何与WebShell通信 |
+| 重点 | WebShell的分类与一句话木马工作原理 | 理解小马/大马/一句话木马的区别，以及客户端（蚁剑/冰蝎/哥斯拉）如何与WebShell通信 |
 | 重点 | 后门检测与清除的系统化流程 | 掌握从注册表、计划任务、服务、WMI、网络连接、进程等多维度全面排查后门的方法 |
 | 难点 | WMI事件订阅后门的原理与检测 | WMI事件订阅涉及过滤器、消费者、绑定三个组件，理解三者关系和如何彻底清除是难点 |
 | 难点 | 免杀技术与现代WebShell对抗 | 理解为什么传统杀软难以检测内存马、加密WebShell等现代攻击技术，以及对应的防御思路（EDR、RASP） |
@@ -1505,34 +1505,126 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 
 > 💡 **前端验证不可作为安全防线**：前端 JavaScript 完全在用户浏览器中执行，用户可任意修改、禁用或绕过相关逻辑。因此所有安全校验**必须在服务端独立实施**，前端校验仅承担提升交互体验的作用（如即时反馈），不能用作安全屏障。
 
-> 🛡️ **最简单有效的防御**：在 IIS 中对上传目录（如 `upload`）禁止脚本执行权限。打开 IIS 管理器 → 展开网站 → 右键 `upload` 目录 → 处理程序映射 → 编辑功能权限 → **取消勾选"脚本"** → 确定。这样即使攻击者成功上传了 WebShell 文件，服务器也不会执行它，只会将其作为纯文本返回——从根本上阻断 WebShell 的利用链。
+> 🛡️ **最简单有效的防御**：在 phpStudy 环境中，对上传目录（如 `upload`）通过 Apache 的 `.htaccess` 文件禁止 PHP 脚本执行。在上传目录下创建 `.htaccess` 文件，写入 `<FilesMatch "\.php$"> Require all denied </FilesMatch>`，即可从根本上阻断 WebShell 的利用——即使攻击者成功上传了 `shell.php` 文件，Apache 也会拒绝执行，只会返回 403 错误。定期使用 D 盾（免费工具）扫描 Web 目录，它能识别绝大多数已知 WebShell 特征。
 
 ---
 
-### 实验9：利用WebShell管理工具连接
+### 实验9：利用蚁剑连接WebShell
 
-#### 使用"中国菜刀"连接WebShell
+> ⚠️ **前置条件**：本实验需要先完成实验7（phpStudy + Upload-Labs部署）和实验8（成功上传一句话木马 `shell.php`）。
 
-1. 下载并打开中国菜刀（China Chopper）
-2. 右键空白区域 → **添加**
-3. 填写配置：
-    - **地址**：`http://192.168.100.20/upload-labs/upload/shell.php`
-    - **密码**：`cmd`（一句话木马中的POST参数名）
-    - **类型**：`PHP`
-4. 点击确定
-5. 双击新添加的条目 → 连接成功
-6. 可进行：文件管理、虚拟终端、数据库管理等操作
+#### 蚁剑（AntSword）简介
 
-#### 使用"冰蝎"连接WebShell（加密通信）
+**蚁剑**是一款开源的 WebShell 管理工具，支持 PHP、ASP、ASPX、JSP 等多种语言，具有丰富的插件生态和活跃的社区。相比已被安全工具广泛识别的"中国菜刀"，蚁剑支持自定义编码器和加密通信，且仍在持续更新维护，是当前教学与安全研究中更合适的 WebShell 管理工具。
 
-1. 冰蝎需要配合专用的服务端WebShell（自带加密通信功能）
-2. 服务端WebShell需要在上传前配置连接密码
-3. 客户端添加目标 → 输入URL和密码 → 连接
-4. 通信全程加密，WAF和IDS无法通过特征匹配检测
+| 对比项 | 中国菜刀（已停更） | 蚁剑（AntSword） |
+| --- | --- | --- |
+| 开源 | 否，闭源 | 是，GitHub 开源 |
+| 更新维护 | 已停止更新 | 持续维护 |
+| 编码器/加密 | 仅 Base64 | 支持多种编码器和自定义加密 |
+| 插件系统 | 无 | 丰富的插件生态 |
+| 流量特征 | 特征明显，易被WAF拦截 | 支持编码器混淆，特征更隐蔽 |
+| 现代防护检测 | 已被主流杀软/IDS广泛识别 | 持续更新对抗检测 |
 
-> 🔍 **检测冰蝎的思路**：虽然内容加密，但可以检测**流量行为特征**——如请求大小固定模式、通信周期规律、POST到动态脚本的频率异常等。基于AI的流量分析工具可以识别这些模式。
+#### 操作步骤
 
-> 🛡️ **最简单有效的防御**：部署 WAF（Web 应用防火墙）拦截 WebShell 连接流量。对于免费方案，可使用 IIS 的"IP 和域限制"功能：IIS 管理器 → 网站 → IP 地址和域限制 → 添加拒绝条目，仅允许可信 IP 访问管理后台和上传目录。同时，定期使用 D 盾（免费工具）扫描 Web 目录，它能识别绝大多数已知 WebShell 特征。
+**第一步：安装蚁剑**
+
+1. 从蚁剑官方 GitHub 仓库下载最新版本的安装包（Windows 版本为 `.zip` 格式）
+2. 解压到任意目录（如 `C:\Tools\AntSword\`）
+3. 双击 `AntSword.exe` 启动
+4. 首次启动会提示初始化，选择"初始化"并指定一个数据存储目录（如 `C:\Tools\AntSword\data\`）
+
+> 💡 **环境要求**：蚁剑基于 Electron 开发，自带 Node.js 运行时，无需额外安装依赖。Windows Server 环境下如提示缺少 Visual C++ 运行库，需先安装 `vc_redist.x64.exe`。
+
+**第二步：添加WebShell目标**
+
+1. 启动蚁剑后，主界面为空的管理面板
+2. 右键空白区域 → **添加数据**
+3. 在弹出的配置窗口中填写：
+   - **URL地址**：`http://localhost/upload-labs/upload/shell.php`
+   - **连接密码**：`cmd`（对应一句话木马中的 `$_POST['cmd']` 参数名）
+   - **备注**：`Upload-Labs实验环境`（可选）
+4. **编码器设置**（可选）：点击"编码器"下拉框，选择 `chr` 或 `base64`。默认使用 `base64` 编码器，即对传输的命令进行 Base64 编码，这是最基本的混淆方式
+5. 点击 **添加** 按钮保存配置
+
+> ⚠️ **参数说明**：
+> - URL 地址必须指向实验8中成功上传的 `shell.php` 文件路径
+> - 连接密码必须与一句话木马中的参数名一致。本实验的木马代码为 `<?php @eval($_POST['cmd']);?>`，参数名为 `cmd`，因此密码填写 `cmd`
+> - 如果 phpStudy 中 Apache 的端口被改为 8080，URL 应改为 `http://localhost:8080/upload-labs/upload/shell.php`
+
+**第三步：测试连接**
+
+1. 在主面板中，右键刚添加的目标 → **文件管理**
+2. 如果连接成功，会弹出文件管理窗口，显示服务器上的目录结构
+3. 观察文件管理界面：左侧为目录树，右侧为文件列表，可以进行上传、下载、删除、重命名等操作
+
+> ⚠️ **预期结果**：成功连接后，可看到服务器的目录结构（如 `C:\phpStudy\PHPTutorial\WWW\upload-labs\`）。如果提示"连接失败"，排查以下问题：
+> - phpStudy 中 Apache/MySQL 是否已启动
+> - URL 地址是否正确（在浏览器中直接访问该 URL，应返回空白页面而非 404）
+> - 连接密码是否与一句话木马中的参数名完全一致
+> - 上传的 `shell.php` 是否已被 phpStudy 的安全机制拦截
+
+**第四步：执行虚拟终端命令**
+
+1. 在目标上右键 → **虚拟终端**
+2. 会弹出一个模拟的命令行终端窗口
+3. 在终端中输入命令并回车执行，结果直接显示在终端中
+
+```
+# 测试常用命令
+whoami          # 查看当前Web服务运行身份
+ipconfig        # 查看网络配置
+net user        # 查看系统用户列表
+dir C:\         # 列出C盘根目录
+type C:\Windows\System32\drivers\etc\hosts   # 读取hosts文件
+```
+
+> ⚠️ **预期结果**：
+> - `whoami` 返回 Web 服务运行用户（如 `nt authority\system` 或 `desktop-xxx\administrator`），这说明 WebShell 以高权限运行，可执行系统管理操作
+> - `ipconfig` 返回靶机的 IP 地址、子网掩码、网关等网络信息
+> - `net user` 返回系统中所有用户账户列表
+
+**第五步：使用文件管理功能**
+
+1. 在目标上右键 → **文件管理**
+2. 导航到 `C:\phpStudy\PHPTutorial\WWW\upload-labs\upload\` 目录
+3. 可执行以下操作：
+   - **上传文件**：右键空白处 → 上传，将本地文件上传到服务器
+   - **下载文件**：右键目标文件 → 下载，将服务器文件下载到本地
+   - **编辑文件**：双击文件 → 弹出编辑器，可在线修改文件内容
+   - **新建文件/文件夹**：右键 → 新建文件/新建目录
+
+> 🔍 **防御启示**：通过以上操作可以看到，一旦 WebShell 上传成功，攻击者可以完全控制服务器——管理文件、执行命令、读取数据。因此**预防 WebShell 上传**（上传目录禁止脚本执行、文件类型白名单验证）远比事后检测清除更为重要。
+
+**第六步：使用编码器增强隐蔽性**
+
+蚁剑的一大特色是支持多种**编码器**，可以对通信数据进行编码或加密，增加流量检测的难度：
+
+1. 右键目标 → **编辑**
+2. 在"编码器"下拉框中，可选择不同的编码方式：
+   - `default`：默认编码（明文 Base64）
+   - `chr`：使用 `chr()` 函数编码，绕过关键字过滤
+   - `chr16`：16 进制 chr 编码
+   - `base64`：标准 Base64 编码
+3. 选择不同的编码器后，蚁剑在发送命令时会自动对数据进行编码，服务端的 PHP 代码无需修改（编码器的工作原理是将命令"翻译"为等价的编码形式，由 PHP 原生函数还原执行）
+
+> 💡 **教学意义**：编码器机制说明，WebShell 检测不能仅依赖简单的关键字匹配。安全团队需要结合流量行为分析、文件完整性监控、运行时防护等多种手段进行综合防御。
+
+#### 蚁剑常用功能一览
+
+| 功能 | 说明 | 入口 |
+| --- | --- | --- |
+| 文件管理 | 上传、下载、编辑、删除服务器文件 | 右键 → 文件管理 |
+| 虚拟终端 | 在服务器上执行系统命令 | 右键 → 虚拟终端 |
+| 数据库管理 | 连接 MySQL/MSSQL 等数据库 | 右键 → 数据库管理 |
+| 插件市场 | 安装扩展插件（如提权扫描、端口扫描等） | 主菜单 → 插件市场 |
+
+> 🛡️ **防御建议**：蚁剑等 WebShell 管理工具的存在说明，仅靠检测工具名或客户端特征无法有效防御。关键在于：
+> 1. 上传目录禁止脚本执行（从根本上阻断 WebShell 利用）
+> 2. 部署 WAF 检测异常 HTTP 请求模式
+> 3. 使用 D 盾等工具定期扫描 Web 目录
+> 4. 监控 Web 进程的异常子进程（如 Apache/Nginx 产生 cmd.exe 子进程）
 
 ---
 
@@ -1546,7 +1638,7 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 # 扫描Web目录中的可疑文件
 # ============================================
 
-$webRoot = "C:\phpStudy\PHPTutorial\WWW"  # 如使用IIS则改为 C:\inetpub\wwwroot
+$webRoot = "C:\phpStudy\PHPTutorial\WWW"  # phpStudy网站根目录
 $suspiciousPatterns = @(
     'eval\s*\(',
     'base64_decode\s*\(',
@@ -1594,126 +1686,212 @@ if ($results.Count -gt 0) {
 }
 ```
 
-#### 方法二：IIS安全加固防止WebShell
+#### 方法二：使用D盾扫描WebShell
 
-**界面方式（IIS 管理器）**：
+**D盾**是一款免费的 WebShell 查杀工具，由国内安全开发者开发，支持对 PHP、ASP、ASPX、JSP 等多种语言的 WebShell 特征检测，是 Web 安全运维中常用的扫描工具。
 
-**操作1：上传目录禁止脚本执行（最关键）**
+**操作步骤**：
 
-1. 打开 IIS 管理器（`Win+R` 输入 `inetmgr`）
-2. 左侧展开网站，找到上传目录（如 `upload`）
-3. 双击该目录，中间面板双击"处理程序映射"
-4. 右侧"操作"面板 → 点击"编辑功能权限"
-5. **取消勾选"脚本"**，仅保留"读取"
-6. 确定保存
+**第一步：下载并运行D盾**
 
-**操作2：配置请求筛选拒绝危险扩展名**
+1. 从 D 盾官方页面下载最新版本（绿色免安装，解压即用）
+2. 解压到任意目录，双击 `D_Safe.exe` 启动
+3. 界面显示"目录扫描"选项卡
 
-1. 选中上传目录，双击"请求筛选"
-2. 切换到"文件扩展名"选项卡
-3. 右侧"操作" → "拒绝文件扩展名"
-4. 依次添加：`.php`、`.asp`、`.aspx`、`.jsp`、`.exe`、`.bat`
-5. 确定保存
+**第二步：扫描Web目录**
 
-**操作3：限制上传文件大小**
+1. 在 D 盾主界面，点击"目录扫描"选项卡
+2. 在"扫描目录"输入框中填入 phpStudy 的网站根目录：`C:\phpStudy\PHPTutorial\WWW\`
+3. 点击 **扫描** 按钮，等待扫描完成
+4. 扫描完成后，D 盾会列出所有可疑文件，并标注危险等级（1~5级，数字越大越危险）
 
-1. 选中网站根节点，双击"请求筛选"
-2. 右侧"操作" → "编辑功能设置"
-3. "允许的最大内容长度"设为 `1048576`（1MB）
-4. 确定保存
+> ⚠️ **预期结果**：实验8中上传的 `shell.php` 应被 D 盾识别为"一句话木马"，等级通常为4或5级。Upload-Labs 靶场自带的 `include.php` 等文件也可能被标记为可疑（这是正常的，因为靶场本身就包含漏洞利用代码）。
 
-**命令行方式**：
+**第三步：处理扫描结果**
+
+1. 在扫描结果列表中，右键可疑文件可选择：
+   - **查看文件**：打开文件查看内容，人工确认是否为恶意代码
+   - **删除文件**：直接删除可疑文件
+   - **隔离文件**：将文件移动到隔离目录（不直接删除，便于后续分析）
+2. 对于确认为 WebShell 的文件（如实验8上传的 `shell.php`），执行删除
+
+> 💡 **D盾的优势**：相比自行编写 PowerShell 扫描脚本，D盾内置了大量已知 WebShell 的特征库（包括各种变形和免杀变种），检测准确率更高，且支持启发式分析，能发现未知的可疑代码。
+
+---
+
+#### 方法三：phpStudy环境WebShell防御加固
+
+在 phpStudy 环境中，Web 服务器为 Apache，PHP 通过 mod_php 或 FastCGI 运行。防御加固的核心思路是：**让上传目录中的文件即使被上传也无法作为 PHP 代码执行**。
+
+**操作1：Apache配置禁止上传目录执行PHP脚本（最关键）**
+
+通过 Apache 的 `.htaccess` 文件或主配置文件，可以限制特定目录不执行 PHP 脚本。这是 phpStudy 环境中最有效的防御手段。
+
+**方法一：使用 .htaccess 文件（推荐，无需修改全局配置）**
+
+1. 在上传目录（`C:\phpStudy\PHPTutorial\WWW\upload-labs\upload\`）下新建文件 `.htaccess`
+2. 写入以下内容：
+
+```apache
+# 禁止该目录下所有PHP文件的执行
+<FilesMatch "\.php$">
+    Require all denied
+</FilesMatch>
+
+# 禁止执行其他脚本类型
+<FilesMatch "\.(php|php5|phtml|asp|aspx|jsp)$">
+    Require all denied
+</FilesMatch>
+```
+
+3. 保存文件。Apache 会在下次请求时自动读取 `.htaccess`
+4. 验证：在浏览器中访问 `http://localhost/upload-labs/upload/shell.php`，应返回 **403 Forbidden** 而非执行 PHP 代码
+
+> ⚠️ **前提条件**：Apache 的主配置文件中必须允许 `.htaccess` 覆盖。phpStudy 2018 默认已开启（`AllowOverride All`），如果 `.htaccess` 不生效，需编辑 `C:\phpStudy\PHPTutorial\Apache\conf\httpd.conf`，确认对应 `<Directory>` 块中 `AllowOverride` 设为 `All`。
+
+**方法二：修改Apache虚拟主机配置（更彻底）**
+
+1. 编辑 Apache 配置文件：`C:\phpStudy\PHPTutorial\Apache\conf\extra\httpd-vhosts.conf`
+2. 在对应的 `<VirtualHost>` 块中添加：
+
+```apache
+# 禁止upload目录执行PHP脚本
+<Directory "C:/phpStudy/PHPTutorial/WWW/upload-labs/upload">
+    <FilesMatch "\.php$">
+        Require all denied
+    </FilesMatch>
+</Directory>
+```
+
+3. 保存后，在 phpStudy 控制面板中**重启 Apache** 使配置生效
+
+**操作2：配置PHP限制上传文件类型**
+
+在 PHP 层面限制可上传的文件类型，增加一道防御线。
+
+1. 编辑 phpStudy 的 PHP 配置文件：`C:\phpStudy\PHPTutorial\php\php-5.3.29-nts\php.ini`
+2. 查找并修改以下配置项：
+
+```ini
+; 限制上传文件大小为2MB
+upload_max_filesize = 2M
+
+; 限制POST数据大小为8MB
+post_max_size = 8M
+
+; 限制每次上传的最大文件数
+max_file_uploads = 5
+```
+
+3. 保存后重启 Apache
+
+> 💡 **说明**：`php.ini` 中的 `upload_max_filesize` 限制了单个文件的大小上限。但 PHP 本身没有"文件类型白名单"配置项——类型验证需要在应用代码（如 Upload-Labs 的 PHP 代码）中实现。因此 `php.ini` 只能限制大小，真正的类型白名单需要在应用层实现。
+
+**操作3：NTFS权限限制上传目录**
+
+即使在 phpStudy 环境中，也可以通过 Windows 的 NTFS 文件系统权限限制上传目录的访问。
+
+```powershell
+# 以管理员身份运行PowerShell
+
+$uploadPath = "C:\phpStudy\PHPTutorial\WWW\upload-labs\upload"
+
+# 查看当前权限
+Get-Acl $uploadPath | Format-List
+
+# 获取当前ACL
+$acl = Get-Acl $uploadPath
+
+# 移除继承（保留已继承的权限，但阻止后续继承）
+$acl.SetAccessRuleProtection($true, $true)
+
+# 仅保留读取+执行权限（禁止写入和修改）
+# 注意：这会影响Upload-Labs的文件上传功能，仅用于演示防御思路
+# 在实际生产环境中，应对Web服务账户和管理员分别设置不同的权限
+
+# 为当前Web服务运行账户设置只读权限
+$readRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "Users", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"
+)
+$acl.AddAccessRule($readRule)
+
+Set-Acl $uploadPath $acl
+Write-Host "上传目录权限已设置为只读" -ForegroundColor Green
+```
+
+> ⚠️ **注意**：在 Upload-Labs 靶场环境中，不应对 upload 目录设置过于严格的 NTFS 权限，否则会影响靶场的文件上传功能导致实验无法进行。上述操作仅用于演示"在实际生产环境中应如何通过 NTFS 权限加固上传目录"这一思路。
+
+**操作4：定期扫描Web目录**
+
+在 phpStudy 环境中建立定期扫描机制，及时发现新增的 WebShell：
 
 ```powershell
 # ============================================
-# IIS上传目录安全加固
-# 核心原则：上传目录禁止脚本执行
+# phpStudy WebShell定时扫描脚本
+# 建议通过计划任务定期执行（如每天凌晨2点）
 # ============================================
 
-# 1. 上传目录禁止脚本执行权限
-# 在IIS管理器中操作：
-# 网站 → uploads目录 → 处理程序映射 → 编辑功能权限 → 取消"脚本"勾选
-
-# 通过PowerShell操作：
-Import-Module WebAdministration
-Set-WebConfigurationProperty -Filter "/system.webServer/handlers" `
-    -PSPath "IIS:\Sites\Default Web Site\upload-labs\upload" `
-    -Name "accessPolicy" -Value "Read"
-
-# 2. 配置请求筛选，拒绝上传目录执行脚本
-Add-WebConfigurationProperty -Filter "/system.webServer/security/requestFiltering/fileExtensions" `
-    -PSPath "IIS:\Sites\Default Web Site\upload-labs\upload" `
-    -Name "." -Value @{fileExtension=".php";allowed="false"}
-
-Add-WebConfigurationProperty -Filter "/system.webServer/security/requestFiltering/fileExtensions" `
-    -PSPath "IIS:\Sites\Default Web Site\upload-labs\upload" `
-    -Name "." -Value @{fileExtension=".asp";allowed="false"}
-
-# 3. 限制上传文件大小（最大1MB）
-Set-WebConfigurationProperty -Filter "/system.webServer/security/requestFiltering/requestLimits" `
-    -PSPath "IIS:\Sites\Default Web Site" `
-    -Name "maxAllowedContentLength" -Value 1048576
-
-# 4. 通过NTFS权限限制上传目录
-$uploadPath = "C:\inetpub\wwwroot\upload-labs\upload"
-$acl = Get-Acl $uploadPath
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    "IIS_IUSRS", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"
+$webRoot = "C:\phpStudy\PHPTutorial\WWW"
+$logFile = "C:\phpStudy\PHPTutorial\WWW\scan_log.txt"
+$suspiciousPatterns = @(
+    'eval\s*\(', 'base64_decode\s*\(', 'system\s*\(',
+    'exec\s*\(', 'passthru\s*\(', 'shell_exec\s*\(',
+    'assert\s*\(', 'preg_replace.*\/e', 'call_user_func',
+    '\$\{.*\$\{', 'WScript\.Shell', 'Execute\s*\(',
+    'Response\.Write.*Exec', 'cmd\.exe', 'powershell'
 )
-$acl.SetAccessRule($rule)
-Set-Acl $uploadPath $acl
+
+$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$report = @()
+
+Get-ChildItem -Path $webRoot -Recurse -Include *.php,*.asp,*.aspx,*.jsp -ErrorAction SilentlyContinue | ForEach-Object {
+    $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content) {
+        foreach ($pattern in $suspiciousPatterns) {
+            if ($content -match $pattern) {
+                $report += [PSCustomObject]@{
+                    FilePath = $_.FullName
+                    Pattern = $pattern
+                    LastModified = $_.LastWriteTime
+                    FileSize = "$([math]::Round($_.Length/1KB,1)) KB"
+                }
+                break
+            }
+        }
+    }
+}
+
+$logEntry = "[$timestamp] 扫描完成，发现 $($report.Count) 个可疑文件`n"
+if ($report.Count -gt 0) {
+    $report | ForEach-Object {
+        $logEntry += "  - $($_.FilePath) | 特征: $($_.Pattern) | 修改时间: $($_.LastModified)`n"
+    }
+}
+
+Add-Content -Path $logFile -Value $logEntry
+Write-Host $logEntry
+
+# 输出到日志文件，便于后续审计
 ```
 
-**Web安全加固Web.config模板**：
+**创建计划任务定期执行扫描**：
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-  <system.webServer>
-    <!-- 上传目录配置：禁止脚本执行 -->
-    <handlers accessPolicy="Read">
-      <!-- 移除所有脚本处理程序，仅保留静态文件读取 -->
-      <remove name="PHP_via_FastCGI" />
-      <remove name="ASPClassic" />
-      <remove name="PageHandlerFactory-Integrated" />
-    </handlers>
-
-    <!-- 请求筛选 -->
-    <security>
-      <requestFiltering>
-        <!-- 限制上传文件大小 1MB -->
-        <requestLimits maxAllowedContentLength="1048576" />
-        <!-- 拒绝危险扩展名 -->
-        <fileExtensions allowUnlisted="true">
-          <add fileExtension=".config" allowed="false" />
-          <add fileExtension=".exe" allowed="false" />
-          <add fileExtension=".bat" allowed="false" />
-          <add fileExtension=".cmd" allowed="false" />
-          <add fileExtension=".ps1" allowed="false" />
-        </fileExtensions>
-      </requestFiltering>
-    </security>
-
-    <!-- 安全响应头 -->
-    <httpProtocol>
-      <customHeaders>
-        <remove name="X-Powered-By" />
-        <add name="X-Frame-Options" value="SAMEORIGIN" />
-        <add name="X-Content-Type-Options" value="nosniff" />
-      </customHeaders>
-    </httpProtocol>
-
-    <!-- 禁用目录浏览 -->
-    <directoryBrowse enabled="false" />
-
-    <!-- 自定义错误页 -->
-    <httpErrors errorMode="DetailedLocalOnly" existingResponse="Replace">
-      <remove statusCode="404" />
-      <error statusCode="404" path="/errors/404.html" responseMode="ExecuteURL" />
-    </httpErrors>
-  </system.webServer>
-</configuration>
+```powershell
+# 每天凌晨2点执行Web目录扫描
+schtasks /create /tn "WebShellScanner" `
+    /tr "powershell.exe -ExecutionPolicy Bypass -File C:\Tools\webshell_scan.ps1" `
+    /sc daily /st 02:00 /ru SYSTEM /f
 ```
+
+> 🛡️ **phpStudy环境防御总结**：
+>
+> | 防御措施 | 实现方式 | 防护效果 |
+> | --- | --- | --- |
+> | **上传目录禁止PHP执行** | `.htaccess` 中 `FilesMatch` 拒绝 `.php` | 阻断WebShell利用链（最有效） |
+> | **限制上传文件大小** | `php.ini` 中 `upload_max_filesize` | 防止上传大型恶意工具 |
+> | **NTFS权限限制** | 仅授予读取权限 | 即使WebShell上传也无法写入其他文件 |
+> | **定期D盾扫描** | 手动或计划任务定时扫描 | 及时发现已上传的WebShell |
+> | **PowerShell脚本扫描** | 特征匹配 + 日志记录 | 自动化检测，支持定期审计 |
 
 ---
 
@@ -1727,7 +1905,7 @@ Set-Acl $uploadPath $acl
 | 一句话木马核心 | `eval`类函数将字符串作为代码执行，是所有一句话木马的关键 |
 | 文件上传利用链 | 发现上传点→绕过前端→绕过后端→上传WebShell→远程控制 |
 | 前端验证不安全 | JavaScript运行在客户端，可被绕过/禁用，安全验证必须在服务端 |
-| 上传目录防护 | **禁止脚本执行权限**是最有效的WebShell防护手段 |
+| 上传目录防护 | **禁止脚本执行权限**是最有效的WebShell防护手段（Apache `.htaccess` / NTFS权限限制） |
 | 现代WebShell工具 | 冰蝎/哥斯拉使用加密通信，传统特征检测失效，需要流量行为分析 |
 | 检测方法 | 文件特征扫描+文件哈希比对+流量分析+行为检测+完整性监控 |
 | 防御体系 | 预防（白名单+权限）→ 检测（WAF+RASP）→ 响应（扫描+日志）→ 恢复（清除+加固） |
@@ -1751,7 +1929,7 @@ Set-Acl $uploadPath $acl
 | 检查文件篡改 | `Get-FileHash 文件路径 -Algorithm SHA256` |
 | 检查网络连接 | `Get-NetTCPConnection -State Established` |
 | 检查可疑进程 | `Get-Process \| Where-Object {$_.Path -like "*Temp*"}` |
-| 上传目录禁止执行 | IIS管理器 → 目录 → 处理程序映射 → 取消"脚本"权限 |
+| 上传目录禁止执行 | Apache `.htaccess` 中 `<FilesMatch "\.php$"> Require all denied </FilesMatch>` |
 | WebShell扫描 | D盾、河马WebShell查杀、自定义PowerShell脚本 |
 
 ## 常见错误排查表
@@ -1760,7 +1938,7 @@ Set-Acl $uploadPath $acl
 | --- | --- | --- |
 | 粘滞键后门不生效 | 系统文件保护阻止替换 | 需要已有SYSTEM权限或WinPE环境操作 |
 | 计划任务不执行 | 任务创建但路径不存在 | 确认恶意程序路径正确且文件存在 |
-| WebShell上传成功但无法访问 | IIS未配置PHP解析 | 安装PHP模块或使用ASPX木马替代 |
+| WebShell上传成功但无法访问 | phpStudy中Apache未启动或PHP未正确解析 | 确认Apache和MySQL状态为绿色"运行中"，检查php.ini配置 |
 | WebShell上传后返回403 | 上传目录有执行权限限制 | 这正是防御措施！说明安全加固有效 |
 | WMI后门删除后仍触发 | WMI仓库缓存 | 重启WMI服务：`Restart-Service Winmgmt` |
 | 启动项删除后仍自动运行 | 还存在其他自启动位置未清理 | 继续排查启动文件夹、计划任务、服务和WMI订阅 |
@@ -1797,13 +1975,13 @@ Set-Acl $uploadPath $acl
 
 1. **后门检测**：相较于注册表后门，为何 WMI 事件订阅后门更难被发现？作为安全运维人员，应如何建立 WMI 后门的常态化排查机制？
 
-2. **WebShell 防护**：项目四中介绍了 IIS"请求筛选"对特定扩展名的拒绝能力。结合本项目的 WebShell 知识，请论证"上传目录禁止脚本执行权限"为何比"请求筛选拒绝 .php 扩展名"更具防护效力。
+2. **WebShell 防护**：在 phpStudy + Apache 环境中，通过 `.htaccess` 禁止上传目录执行 PHP 脚本与在 PHP 代码中通过扩展名黑名单拒绝 `.php` 文件上传，哪种方式防护更有效？请从防御层次和绕过难度两个角度进行论证。
 
 3. **攻防对抗**：传统杀毒软件难以有效检测冰蝎（Behinder）等加密 WebShell 的原因是什么？现代 EDR 相对于传统杀软提供了哪些技术演进？
 
 4. **应急响应**：假设你是一台 Windows 服务器的安全管理员，发现 CPU 占用率异常升高且存在未知的对外网络连接。请按时间轴列出完整的排查步骤与应急处置流程。
 
-5. **纵深防御**：综合本项目所学的后门技术与 WebShell 利用方法，请为一台面向公网的 IIS Web 服务器设计完整的安全防护方案，并按优先级排序各项措施。
+5. **纵深防御**：综合本项目所学的后门技术与 WebShell 利用方法，请为一台运行 phpStudy（Apache + PHP + MySQL）的 Windows Web 服务器设计完整的安全防护方案，并按优先级排序各项措施。
 
 ---
 
@@ -1813,8 +1991,8 @@ Set-Acl $uploadPath $acl
 
 | 关联项目 | 关联内容 |
 | --- | --- |
-| **项目四·IIS 网站管理** | WebShell 攻击的载体即为 IIS Web 服务。项目四所介绍的安全加固措施（请求筛选、权限控制、日志审计）构成抵御 WebShell 的第一道防线 |
-| **项目四·上传目录权限** | "上传目录禁止脚本执行权限"是抵御 WebShell 最有效的单一措施，直接承袭项目四中 NTFS 权限配置的相关知识 |
+| **项目四·IIS 网站管理** | IIS 与 phpStudy/Apache 均可作为 WebShell 攻击的载体。项目四所介绍的安全加固思路（请求筛选、权限控制、日志审计）同样适用于 Apache 环境的防御 |
+| **项目四·上传目录权限** | "上传目录禁止脚本执行权限"是抵御 WebShell 最有效的单一措施——在 IIS 中通过处理程序映射取消"脚本"权限，在 Apache 中通过 `.htaccess` 拒绝 `.php` 文件执行，原理相通 |
 | **项目二·用户管理** | 弱口令、高权限账户与不规范的授权策略，是后门植入与 WebShell 利用后实施权限扩张的常见基础 |
 | **项目六·域管理** | 域控制器一旦失陷，攻击者可借助组策略（GPO）批量分发后门，威胁波及全域计算机；保护域控即保护整个域 |
 | **项目四·纵深防御** | 本项目所阐述的后门检测与 WebShell 防御完全遵循纵深防御原则——不依赖任何单一手段，强调多层防护的协同与互补 |
