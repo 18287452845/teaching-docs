@@ -1269,84 +1269,9 @@ ls C:\phpStudy\PHPTutorial\WWW\
 Expand-Archive -Path "$env:USERPROFILE\Desktop\upload-labs.zip" -DestinationPath "C:\phpStudy\PHPTutorial\WWW\" -Force
 ```
 
-**第四步：修复缺失的关卡文件**
 
-> ⚠️ **已知问题**：upload-labs 原始 ZIP 包中 **Pass-01、Pass-15、Pass-16** 三个关卡缺少 `index.php` 文件，导致点击这些关卡时返回 404 错误。需要手动创建缺失的文件。
 
-```powershell
-# 检查哪些关卡缺少 index.php
-Get-ChildItem "C:\phpStudy\PHPTutorial\WWW\upload-labs\Pass-*" -Directory | ForEach-Object {
-    $hasIndex = Test-Path (Join-Path $_.FullName "index.php")
-    if (-not $hasIndex) { Write-Output "$($_.Name): 缺少 index.php" }
-}
-```
-
-**修复 Pass-01**（前端JS验证关卡，无服务端校验）：
-
-在 `C:\phpStudy\PHPTutorial\WWW\upload-labs\Pass-01\` 目录下创建 `index.php`，内容如下：
-
-```php
-<?php
-include '../config.php';
-include '../head.php';
-include '../menu.php';
-$is_upload = false;
-$msg = null;
-if (isset($_POST['submit'])) {
-    if (file_exists(UPLOAD_PATH)) {
-        $temp_file = $_FILES['upload_file']['tmp_name'];
-        $img_path = UPLOAD_PATH . '/' . $_FILES['upload_file']['name'];
-        if (move_uploaded_file($temp_file, $img_path)) {
-            $is_upload = true;
-        } else {
-            $msg = '上传出错！';
-        }
-    } else {
-        $msg = UPLOAD_PATH.'文件夹不存在,请手工创建！';
-    }
-}
-?>
-<div id="upload_panel"><ol>
-<li><h3>任务</h3><p>上传一个<code>webshell</code>到服务器。</p></li>
-<li><h3>上传区</h3>
-<form enctype="multipart/form-data" method="post" onsubmit="return checkFile()">
-<p>请选择要上传的图片：</p>
-<input class="input_file" type="file" name="upload_file"/>
-<input class="button" type="submit" name="submit" value="上传"/>
-</form>
-<div id="msg"><?php if($msg!=null){echo "提示：".$msg;}?></div>
-<div id="img"><?php if($is_upload){echo '<img src="'.$img_path.'" width="250px" />';}?></div>
-</li>
-<?php if($_GET['action']=="show_code"){include 'show_code.php';}?></ol></div>
-<?php include '../footer.php';?>
-```
-
-**修复 Pass-15**（getimagesize 关卡）和 **Pass-16**（exif_imagetype 关卡）：
-
-这两个关卡的 `show_code.php` 中已包含完整的 PHP 逻辑代码。分别在对应目录下创建 `index.php`，将 `show_code.php` 中的 PHP 代码提取出来，加上标准的页面框架即可。具体代码结构与 Pass-13/Pass-14 的 `index.php` 一致，仅服务端校验函数不同。
-
-> 💡 **快速方法**：也可从 GitHub 仓库下载完整版 upload-labs，将缺失的 `index.php` 文件复制到对应目录。
-
-**第五步：启用 php_exif 扩展（Pass-16 必需）**
-
-> ⚠️ **已知问题**：Pass-16 使用 `exif_imagetype()` 函数校验图片类型，该函数依赖 `php_exif` 扩展。phpStudy 2018 默认**未启用**此扩展，需要手动开启。
-
-```powershell
-# 1. 编辑 php.ini 文件，取消 php_exif 扩展的注释
-# 文件路径：C:\phpStudy\PHPTutorial\php\php-5.3.29-nts\php.ini
-# 找到以下行（带分号表示被注释）：
-# ;extension=php_exif.dll      ; Must be after mbstring as it depends on it
-# 删除行首的分号，改为：
-# extension=php_exif.dll      ; Must be after mbstring as it depends on it
-
-# 2. 重启 Apache 使配置生效
-# 在 phpStudy 控制面板中先点击"停止"再点击"启动"，或执行：
-Restart-Service Apache2.4
-```
-
-> 💡 **php_exif 依赖关系**：`php_exif.dll` 必须在 `php_mbstring.dll` 之后加载。phpStudy 2018 的 php.ini 中 `php_mbstring` 已在前面启用，因此只需取消 `php_exif` 的注释即可。
-
-**第六步：验证靶场部署成功**
+**第四步：验证靶场部署成功**
 
 1. 打开浏览器访问：`http://localhost/upload-labs/`
 2. 应看到Upload-Labs首页，显示"upload-labs"标题和关卡列表（Pass-01 ~ Pass-21）
@@ -1354,7 +1279,7 @@ Restart-Service Apache2.4
 
 > ⚠️ **预期结果**：看到Upload-Labs的关卡选择界面。如果显示空白页或PHP源码，说明PHP未正确配置；如果显示404，检查目录路径是否正确或是否缺少 `index.php` 文件。
 
-**第七步：创建上传目录并设置权限**
+**第五步：创建上传目录并设置权限**
 
 ```powershell
 # Upload-Labs需要upload目录有写入权限
@@ -1367,7 +1292,7 @@ mkdir C:\phpStudy\PHPTutorial\WWW\upload-labs\upload
 # 确保Web服务有写入权限（phpStudy环境通常已自动配置）
 ```
 
-**第八步：了解关卡结构**
+**第六步：了解关卡结构**
 
 Upload-Labs包含21个不同难度的关卡，涵盖所有常见的文件上传验证绕过技术：
 
