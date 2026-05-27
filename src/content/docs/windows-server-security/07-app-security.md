@@ -1517,6 +1517,7 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 
 **蚁剑**是一款开源的 WebShell 管理工具，支持 PHP、ASP、ASPX、JSP 等多种语言，具有丰富的插件生态和活跃的社区。相比已被安全工具广泛识别的"中国菜刀"，蚁剑支持自定义编码器和加密通信，且仍在持续更新维护，是当前教学与安全研究中更合适的 WebShell 管理工具。
 
+
 | 对比项 | 中国菜刀（已停更） | 蚁剑（AntSword） |
 | --- | --- | --- |
 | 开源 | 否，闭源 | 是，GitHub 开源 |
