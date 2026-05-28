@@ -1296,21 +1296,21 @@ mkdir C:\phpStudy\PHPTutorial\WWW\upload-labs\upload
 
 Upload-Labs包含21个不同难度的关卡，涵盖所有常见的文件上传验证绕过技术：
 
-| 关卡 | 验证类型 | 绕过方法 |
-| --- | --- | --- |
-| Pass-01 | 前端JavaScript验证 | 禁用JS或Burp Suite拦截修改 |
-| Pass-02 | Content-Type验证 | 修改Content-Type为image/jpeg |
-| Pass-03 | 扩展名黑名单（不完整） | 使用.php5、.phtml等 |
-| Pass-04 | .htaccess覆盖 | 上传.htaccess文件 |
-| Pass-05 | 大小写绕过 | 使用.PhP扩展名 |
-| Pass-06 | 空格绕过 | 文件名末尾加空格 |
-| Pass-07 | 点号绕过 | 文件名末尾加点 |
-| Pass-08 | ::$DATA绕过 | Windows NTFS特性 |
-| Pass-09 | 点+空格组合绕过 | 多次组合 |
-| Pass-10 | 双写绕过 | `.pphphp` |
-| Pass-11-12 | 00截断 | `%00`截断（GET/POST），需PHP < 5.3.4 |
-| Pass-13-16 | 文件头/图片马 | 图片文件嵌入PHP代码，配合include.php文件包含漏洞 |
-| Pass-17-21 | 条件竞争等高级技术 | race condition |
+| 关卡         | 验证类型           | 绕过方法                            |
+| ---------- | -------------- | ------------------------------- |
+| Pass-01    | 前端JavaScript验证 | 禁用JS或Burp Suite拦截修改             |
+| Pass-02    | Content-Type验证 | 修改Content-Type为image/jpeg       |
+| Pass-03    | 扩展名黑名单（不完整）    | 使用.php5、.phtml等                 |
+| Pass-04    | .htaccess覆盖    | 上传.htaccess文件                   |
+| Pass-05    | 大小写绕过          | 使用.PhP扩展名                       |
+| Pass-06    | 空格绕过           | 文件名末尾加空格                        |
+| Pass-07    | 点号绕过           | 文件名末尾加点                         |
+| Pass-08    | ::$DATA绕过      | Windows NTFS特性                  |
+| Pass-09    | 点+空格组合绕过       | 多次组合                            |
+| Pass-10    | 双写绕过           | `.pphphp`                       |
+| Pass-11-12 | 00截断           | `%00`截断（GET/POST），需PHP < 5.3.4  |
+| Pass-13-16 | 文件头/图片马        | 图片文件嵌入PHP代码，配合include.php文件包含漏洞 |
+| Pass-17-21 | 条件竞争等高级技术      | race condition                  |
 
 ---
 
@@ -1443,14 +1443,14 @@ curl -d "cmd=system('net user');" http://localhost/upload-labs/upload/shell.php
 **蚁剑**是一款开源的 WebShell 管理工具，支持 PHP、ASP、ASPX、JSP 等多种语言，具有丰富的插件生态和活跃的社区。相比已被安全工具广泛识别的"中国菜刀"，蚁剑支持自定义编码器和加密通信，且仍在持续更新维护，是当前教学与安全研究中更合适的 WebShell 管理工具。
 
 
-| 对比项 | 中国菜刀（已停更） | 蚁剑（AntSword） |
-| --- | --- | --- |
-| 开源 | 否，闭源 | 是，GitHub 开源 |
-| 更新维护 | 已停止更新 | 持续维护 |
-| 编码器/加密 | 仅 Base64 | 支持多种编码器和自定义加密 |
-| 插件系统 | 无 | 丰富的插件生态 |
-| 流量特征 | 特征明显，易被WAF拦截 | 支持编码器混淆，特征更隐蔽 |
-| 现代防护检测 | 已被主流杀软/IDS广泛识别 | 持续更新对抗检测 |
+| 对比项    | 中国菜刀（已停更）      | 蚁剑（AntSword）  |
+| ------ | -------------- | ------------- |
+| 开源     | 否，闭源           | 是，GitHub 开源   |
+| 更新维护   | 已停止更新          | 持续维护          |
+| 编码器/加密 | 仅 Base64       | 支持多种编码器和自定义加密 |
+| 插件系统   | 无              | 丰富的插件生态       |
+| 流量特征   | 特征明显，易被WAF拦截   | 支持编码器混淆，特征更隐蔽 |
+| 现代防护检测 | 已被主流杀软/IDS广泛识别 | 持续更新对抗检测      |
 
 #### 操作步骤
 
