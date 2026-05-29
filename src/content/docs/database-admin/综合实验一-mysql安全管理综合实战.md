@@ -498,7 +498,7 @@ FROM mysql.user WHERE user = '';
 -- ========== 审计项 2：root 远程登录检查 ==========
 SELECT 'root远程登录' AS 检查项,
     CASE WHEN COUNT(*) = 0 THEN '通过' ELSE '风险' END AS 结果,
-    CONCAT('root 可从 ', GROUP_CONCAT(host), ' 登录') AS 详情
+    CONCAT('root 可从 ', CONVERT(GROUP_CONCAT(host) USING utf8mb4), ' 登录') AS 详情
 FROM mysql.user WHERE user = 'root' AND host != 'localhost';
 
 -- ========== 审计项 3：空密码账号检查 ==========
