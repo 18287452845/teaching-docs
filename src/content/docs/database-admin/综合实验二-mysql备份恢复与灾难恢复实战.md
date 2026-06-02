@@ -110,14 +110,14 @@ sudo mysqldump -u root -p123456 \
 
 参数说明：
 
-| 参数 | 含义 |
-| --- | --- |
+| 参数                      | 含义                                          |
+| ----------------------- | ------------------------------------------- |
 | `--databases ecommerce` | 指定备份的数据库，输出中包含 `CREATE DATABASE` 和 `USE` 语句 |
-| `--single-transaction` | InnoDB 一致性快照备份，不锁表（关键参数） |
-| `--routines` | 包含存储过程和函数 |
-| `--triggers` | 包含触发器 |
-| `--events` | 包含定时事件 |
-| `--set-gtid-purged=OFF` | 不输出 GTID 信息（单机环境推荐） |
+| `--single-transaction`  | InnoDB 一致性快照备份，不锁表（关键参数）                    |
+| `--routines`            | 包含存储过程和函数                                   |
+| `--triggers`            | 包含触发器                                       |
+| `--events`              | 包含定时事件                                      |
+| `--set-gtid-purged=OFF` | 不输出 GTID 信息（单机环境推荐）                         |
 
 ### 2.2 用 mysqldump 备份所有数据库
 

