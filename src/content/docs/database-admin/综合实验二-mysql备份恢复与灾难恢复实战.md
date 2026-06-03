@@ -246,7 +246,60 @@ sudo mysqlbinlog --base64-output=DECODE-ROWS -v \
     /var/lib/mysql/mysql-bin.000003 | grep -B 5 "DELETE FROM"
 ```
 
-查看输出，找到 `DELETE FROM` 事件的 `# at` 位置（例如 `# at 580`）：
+典型输出如下：
+
+```
+# at 316
+#260603 10:09:21 server id 1  end_log_pos 382 CRC32 0xc46cad82  Table_map: `ecommerce`.`orders` mapped to number 92
+# has_generated_invisible_primary_key=0
+# at 382
+#260603 10:09:21 server id 1  end_log_pos 525 CRC32 0x3ed3165c  Delete_rows: table id 92 flags: STMT_END_F
+### DELETE FROM `ecommerce`.`orders`
+```
+
+<aside>
+💬
+
+**binlog ROW 格式详解——如何确定 stop-position**
+
+binlog ROW 格式下，一条 SQL 语句（如 `DELETE FROM orders`）会被拆成**多个事件**写入 binlog。以上面的输出为例：
+
+```
+# at 316                              ← 事件1：Table_map（标记目标表）
+# ... Table_map: `ecommerce`.`orders` ...
+# at 382                              ← 事件2：Delete_rows（实际删除的行数据）
+# ... Delete_rows: table id 92 ...
+### DELETE FROM `ecommerce`.`orders`   ← 被删除的具体行（伪 SQL，仅供阅读）
+```
+
+**事件结构说明：**
+
+| 字段 | 含义 |
+| --- | --- |
+| `# at 316` | 本事件在 binlog 文件中的起始字节位置 |
+| `end_log_pos 382` | 本事件结束位置 = 下一个事件的起始位置 |
+| `Table_map` | 声明本次操作的目标表（表名 → 内部编号的映射） |
+| `Delete_rows` | 包含被删除行的具体数据（ROW 格式的核心） |
+| `### DELETE FROM` | `mysqlbinlog -v` 生成的伪 SQL，仅供阅读，不参与回放 |
+
+**关键规则：`# at` 的值就是事件的 position。** `--stop-position=N` 的含义是"回放在位置 N **之前**停止"，即不回放位置 N 处的事件。
+
+**确定 stop-position 的方法：**
+
+1. 用 `grep -B 5 "DELETE FROM"` 找到误操作的位置
+2. 找到误操作所属的**第一个事件**（通常是 `Table_map`）的 `# at` 值
+3. 这个值就是 `--stop-position`
+
+在上面的例子中，DELETE 操作的事件组从 `# at 316`（Table_map）开始，因此：
+
+- `--stop-position=316` → 回放在 DELETE 事件组**之前**停止，DELETE **不会**被执行 ✅
+- `--stop-position=382` → Table_map 事件已被回放，但缺少配对的 Delete_rows，可能导致异常 ❌
+
+**口诀：stop-position 取误操作事件组的第一个 `# at` 值。**
+
+INSERT 和 UPDATE 操作的规则完全相同——找到 `Table_map → Write_rows`（INSERT）或 `Table_map → Update_rows`（UPDATE）事件组的第一个 `# at`，就是 stop-position。
+
+</aside>
 
 ```bash
 # 更精确地查看该位置附近的内容
@@ -259,7 +312,7 @@ sudo mysqlbinlog --base64-output=DECODE-ROWS -v \
 
 ```
 # at 380                                     ← INSERT（正常操作）
-# at 580                                     ← DELETE（误操作）← stop-position 用这个
+# at 316                                     ← DELETE 的 Table_map（误操作）← stop-position 用这个
 ```
 
 **第 3 步：从备份恢复到备份时刻的状态**
