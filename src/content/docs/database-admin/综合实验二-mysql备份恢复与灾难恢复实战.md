@@ -64,7 +64,7 @@ title: "综合实验二 MySQL 备份恢复与灾难恢复综合实战"
 # 在虚拟机中创建备份目录
 sudo mkdir -p /backup/full
 sudo mkdir -p /backup/binlog
-sudo chown -R mysql:mysql /backup
+sudo chown -R ly:ly /backup
 ```
 
 ### 1.3 确认 binlog 已开启
@@ -228,7 +228,7 @@ SELECT NOW() AS '正常操作时间';
 
 -- 灾难发生：误删 orders 表所有数据！
 DELETE FROM orders;
-SELECT COUNT(*) AS '误删后订单数';  -- 结果：0
+SELECT COUNT(*) AS '误删后订单数' FROM orders;  -- 结果：0
 ```
 
 #### 恢复过程
