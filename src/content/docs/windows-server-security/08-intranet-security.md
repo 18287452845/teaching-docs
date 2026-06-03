@@ -246,6 +246,44 @@ ss -tlnp | grep -E "7000|7500"
 # 预期：7000 和 7500 端口均在监听
 ```
 
+**第五步（可选）：将 frps 注册为 systemd 服务（推荐）**
+
+上面的 `bg + disown` 方式简单但不可靠——SSH 断开或服务器重启后 frps 不会自动恢复。在真实运维中，推荐注册为 systemd 服务：
+
+```bash
+# 创建 systemd 服务文件
+cat > /etc/systemd/system/frps.service << 'EOF'
+[Unit]
+Description=frp server (frps)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/frp/frps -c /opt/frp/frps.toml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 启用并启动服务
+systemctl daemon-reload
+systemctl enable frps
+systemctl start frps
+
+# 查看状态
+systemctl status frps
+# 预期：Active: active (running)
+
+# 常用管理命令
+systemctl stop frps      # 停止
+systemctl restart frps   # 重启
+journalctl -u frps -f    # 查看实时日志
+```
+
+> 💡 **为什么推荐 systemd？** SSH 断开不会影响服务；服务器重启后 frps 自动启动；日志可通过 `journalctl` 统一管理。课堂实验用 `bg + disown` 即可，生产环境务必用 systemd。
+
 **第五步：访问 frp Dashboard**
 
 在本地浏览器中打开 `http://<ECS公网IP>:7500`，用户名 `admin`，密码 `admin123`。预期显示 frp Dashboard 页面（此时无客户端连接）。
@@ -353,7 +391,7 @@ type = "socks5"
 **第四步：启动 frpc**
 
 ```powershell
-# 启动 frp 客户端
+# 前台启动（便于观察初始连接是否成功）
 C:\frp\frpc.exe -c C:\frp\frpc.toml
 
 # 预期输出：
@@ -365,6 +403,38 @@ C:\frp\frpc.exe -c C:\frp\frpc.toml
 ```
 
 > ⚠️ **如果连接失败**：检查（1）阿里云安全组是否放行 7000 端口；（2）frpc.toml 中 IP 和 token 是否正确；（3）SRV02 是否能 ping 通 ECS。
+
+**第五步（可选）：将 frpc 注册为 Windows 服务（推荐）**
+
+前台运行的 frpc 在关闭 PowerShell 窗口或重启后就会停止。推荐使用 **NSSM**（Non-Sucking Service Manager）将其注册为 Windows 服务，实现开机自启和自动恢复：
+
+```powershell
+# 1. 下载 NSSM（服务管理工具）
+Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile "C:\nssm.zip"
+Expand-Archive -Path "C:\nssm.zip" -DestinationPath "C:\nssm" -Force
+
+# 2. 注册 frpc 为 Windows 服务
+C:\nssm\nssm-2.24\win64\nssm.exe install frpc "C:\frp\frpc.exe" "-c" "C:\frp\frpc.toml"
+
+# 3. 配置服务自动重启（失败后5秒重启）
+C:\nssm\nssm-2.24\win64\nssm.exe set frpc AppRestartDelay 5000
+C:\nssm\nssm-2.24\win64\nssm.exe set frpc AppStdout "C:\frp\service.log"
+C:\nssm\nssm-2.24\win64\nssm.exe set frpc AppStderr "C:\frp\service.log"
+
+# 4. 启动服务
+Start-Service frpc
+
+# 5. 验证服务状态
+Get-Service frpc
+# 预期：Status = Running，StartType = Automatic
+
+# 常用管理命令
+Stop-Service frpc        # 停止
+Restart-Service frpc     # 重启
+Get-Content C:\frp\service.log -Tail 20   # 查看日志
+```
+
+> 💡 **为什么推荐 NSSM？** 关闭 PowerShell 窗口不影响 frpc；系统重启后 frpc 自动启动并重新连接 frps；崩溃后自动重启。课堂实验可直接前台运行，生产环境推荐 NSSM 注册服务。
 
 ---
 
@@ -628,29 +698,51 @@ proxychains curl http://127.0.0.1:10002
 
 ## 🧠 理论知识
 
-内网信息收集是渗透测试的关键阶段。攻击者在获取内网初始访问后，需要全面了解网络拓扑、主机信息、用户账户等，才能规划横向移动路径。
+### 为什么信息收集是第一步？
 
-**信息收集的层次**：
+攻击者通过 frp 隧道进入内网后，面对的是一个**陌生的网络环境**——不知道有哪些主机、开了什么服务、谁是管理员。盲目攻击不仅效率低，还容易触发告警。
+
+信息收集的目标是回答三个核心问题：
+
+| 问题 | 攻击者需要知道什么 | 为什么重要 |
+| --- | --- | --- |
+| **我在哪？** | 本机 IP、网段、DNS、域名 | 确定所处的网络位置和可达范围 |
+| **周围有什么？** | 同网段主机、开放端口、服务版本 | 发现可攻击的目标 |
+| **我能做什么？** | 当前权限、凭据、安全软件状态 | 判断能执行哪些攻击操作 |
+
+### 信息收集的三层体系
 
 ```
-第一层：本机信息
-├── 网络配置（IP、网关、DNS）        ipconfig /all, route print
-├── 系统信息（OS版本、补丁）          systeminfo
-├── 用户和组信息                      whoami /all, net user
-├── 进程和服务                        tasklist /svc
-└── 安全软件状态
+由近及远，逐步扩展：
 
-第二层：网络邻居
-├── ARP缓存（同网段主机）             arp -a
-├── NetBIOS广播                      net view
-├── 网络共享资源                      net share
-└── 域信息                            net group /domain
+第一层：本机信息（你当前控制的机器）
+├── 网络配置 → ipconfig /all, route print
+│   目的：确定 IP 地址、网关、DNS、是否存在多网卡（多网段可达）
+├── 系统信息 → systeminfo
+│   目的：OS 版本和补丁列表 → 判断可利用的漏洞
+├── 用户和组 → whoami /all, net user
+│   目的：当前权限、本地管理员有哪些 → 判断提权路径
+└── 进程和服务 → tasklist /svc
+    目的：发现安全软件（Defender、杀毒）→ 决定是否需要绕过
 
-第三层：主动扫描
-├── Nmap端口扫描
-├── 服务版本探测
-└── 协议枚举（SMB/LDAP/Kerberos）
+第二层：网络邻居（同网段的其他主机）
+├── ARP 缓存 → arp -a
+│   目的：已通信过的主机列表（被动发现，不产生额外流量）
+├── NetBIOS 广播 → net view
+│   目的：局域网内可见的 Windows 主机
+└── 共享资源 → net share, net view \\主机
+    目的：发现可访问的共享文件夹（可能包含敏感数据或可写入恶意文件）
+
+第三层：主动扫描（从外部或通过代理扫描）
+├── Nmap 端口扫描 → proxychains nmap -sT
+│   目的：发现开放端口和服务版本
+├── 漏洞扫描 → nmap --script smb-vuln*
+│   目的：检测已知漏洞（如 EternalBlue）
+└── 协议枚举 → nmap --script smb-enum-*
+    目的：枚举 SMB 共享、用户账户
 ```
+
+> 💡 **关键原则**：从被动到主动。先用 `arp -a`、`net view` 等不产生扫描流量的命令收集信息，再用 Nmap 等主动扫描工具。被动收集不会触发 IDS 告警，主动扫描可能会。
 
 ---
 
