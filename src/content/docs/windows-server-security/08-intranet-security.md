@@ -190,13 +190,21 @@ frp 的解决方案（利用出站通道）：
 3. 输入 root 密码进入网页终端
 4. 后续命令均在这个网页终端中执行
 
+先在本机准备好 `frp_0.61.1_linux_amd64.tar.gz` 压缩包，然后在腾讯云 WebShell 页面使用**文件上传**功能，将压缩包上传到服务器的 `/opt` 目录。
+
+> 💡 **注意**：本实验不要求在 CVM 上使用 `wget` 下载 frp。服务器端只负责接收已上传的压缩包并解压。
+
 ```bash
 # 更新系统
 apt update && apt upgrade -y
 
-# 下载 frp（访问 https://github.com/fatedier/frp/releases 获取最新版本号）
+# 进入压缩包所在目录
 cd /opt
-wget https://github.com/fatedier/frp/releases/download/v0.61.1/frp_0.61.1_linux_amd64.tar.gz
+
+# 确认压缩包已上传
+ls frp_0.61.1_linux_amd64.tar.gz
+
+# 直接解压并整理目录
 tar -xzf frp_0.61.1_linux_amd64.tar.gz
 mv frp_0.61.1_linux_amd64 frp
 cd frp
