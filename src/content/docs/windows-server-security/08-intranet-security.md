@@ -547,6 +547,7 @@ localPort = 80
 remotePort = 10002
 
 # SOCKS5代理：通过隧道访问 Win11 实验主机本地网络
+# remotePort 可自定义，只要在 frps allowPorts 范围（10000-20000）内
 [[proxies]]
 name = "socks5"
 type = "tcp"
@@ -554,6 +555,8 @@ remotePort = 10080
 [proxies.plugin]
 type = "socks5"
 ```
+
+> 💡 **端口说明**：`remotePort`（10002、10080）均可自定义为 10000-20000 范围内的任意端口，只要不与其他隧道冲突即可。后续文档中统一使用 10002（Web）和 10080（SOCKS5）作为示例。
 
 > ⚠️ **扩展说明**：RDP、WinRM、SMB 等高风险服务不再作为本机基础实验默认开放。后续弱口令、PtH 等内容应使用教师授权的专用靶机或课堂演示环境，避免把个人电脑的管理端口暴露到公网。
 
@@ -677,7 +680,89 @@ SOCKS5代理模式（一键穿透）：
   优点：一条隧道即可访问 Win11 实验主机所在网络中的所有服务（RDP、SMB、WinRM 等）
 ```
 
+### 什么是 SOCKS5？
+
+**SOCKS**（Socket Secure）是一种工作在 **OSI 第五层（会话层）** 的通用代理协议。相比只能转发 HTTP 流量的 HTTP 代理，SOCKS 不关心上层应用协议——它只负责在客户端和目标之间**搬运原始 TCP/UDP 数据包**，所以 HTTP、RDP、SMB、SSH 等任何协议都能通过它工作。
+
+SOCKS 经历了多个版本演进：
+
+| 版本 | 关键特性 | 局限 |
+| --- | --- | --- |
+| SOCKS4 | 基本 TCP 代理 | 不支持 UDP、不支持认证、不支持 IPv6 |
+| SOCKS4a | 支持域名解析 | 仍不支持 UDP 和认证 |
+| **SOCKS5** | **TCP + UDP、多种认证方式、IPv6、域名解析** | 当前主流版本 |
+
+> 💡 **一句话理解**：SOCKS5 是"万能代理"——不挑协议、支持认证、支持 UDP。渗透测试中选择 SOCKS5 的原因就是**通用性**：一条隧道覆盖所有协议，不需要为每个服务单独配置转发。
+
+### SOCKS5 工作流程
+
+```
+以 proxychains curl http://192.168.1.10:8080 为例：
+
+①  攻击机的 proxychains 拦截网络请求
+    proxychains → CVM公网IP:10080（SOCKS5 代理地址）
+
+②  SOCKS5 握手（协商认证方式）
+    攻击机 → 代理：「我支持 无认证/用户名密码 等方式」
+    代理 → 攻击机：「用无认证方式」
+
+③  SOCKS5 CONNECT 请求（告诉代理"帮我连谁"）
+    攻击机 → 代理：「请帮我连接 192.168.1.10:8080」
+    代理 → 攻击机：「已连接成功，可以开始传数据」
+
+④  数据透传（代理在中间搬运数据）
+    攻击机 ←→ 代理（frpc） ←→ 192.168.1.10:8080
+
+关键：代理只负责搬运原始字节，不解析 HTTP/SMTP/RDP 等应用层协议
+```
+
+> 💡 **为什么 SOCKS5 代理从 frpc（Win11）本地发起？** 因为 SOCKS5 代理运行在 frpc 进程内部。当攻击机通过 CVM:10080 发来"帮我连 192.168.1.10:8080"的请求时，frpc 在 Win11 本地向 192.168.1.10:8080 建立连接，然后把两端的数据互相转发。所以：
+> - 指向 `127.0.0.1` = 连接 Win11 实验主机自身
+> - 指向 `192.168.1.10` = 连接 Win11 所在内网的其他主机
+> - 攻击机始终不直接接触内网，所有流量都通过 frpc 中转
+
+### frp 中的 SOCKS5 配置解读
+
+回看实验2中 frpc.toml 的 SOCKS5 配置：
+
+```toml
+[[proxies]]
+name = "socks5"
+type = "tcp"
+remotePort = 10080
+[proxies.plugin]
+type = "socks5"
+```
+
+| 配置项 | 含义 |
+| --- | --- |
+| `type = "tcp"` | frpc 与 frps 之间走 TCP 隧道（传输层） |
+| `remotePort = 10080` | 在 CVM 上开放的端口，供外部连接 SOCKS5 代理。**可自定义**，只要在 frps 的 `allowPorts` 范围内即可（本例为 10000-20000） |
+| `[proxies.plugin]` | 使用 frp 的插件机制——frpc 在本地启动一个**内嵌的 SOCKS5 服务** |
+| `type = "socks5"` | 插件类型为 SOCKS5 |
+
+> 💡 **frpc 既是 SOCKS5 服务端，又是 frps 的客户端**：frpc 向 frps 注册隧道（客户端角色），同时在本地内嵌启动一个 SOCKS5 服务端（插件角色）。当外部流量通过 CVM:10080 到达 frpc 时，frpc 先解析 SOCKS5 协议提取目标地址，再向目标发起实际连接。这就是"一条隧道访问整个内网"的秘密。
+
+### proxychains
+
 **proxychains** 是 Linux 下的代理链工具，可以强制让任何程序的网络流量通过 SOCKS5 代理转发。配合 frp 的 SOCKS5 隧道，几乎所有网络工具（nmap、hydra、curl 等）都可以通过隧道工作。
+
+proxychains 的工作原理：
+
+```
+正常程序：  应用 → 目标IP:端口（直连）
+proxychains：应用 → proxychains 拦截 → SOCKS5代理(CVM:10080) → frpc → 目标IP:端口
+
+proxychains 通过 LD_PRELOAD 注入 hook 库，拦截程序的 connect() 系统调用，
+将原本直连目标的 TCP 连接改为发给 SOCKS5 代理，
+由代理代为连接真实目标。
+```
+
+> ⚠️ **proxychains 的限制**：
+> - 只能代理 TCP 连接，不支持 UDP
+> - Nmap 只能用 `-sT`（TCP Connect 扫描），不能用 `-sS`（SYN 扫描需要 raw socket）
+> - 代理链路增加延迟，扫描速度明显变慢
+> - 不代理 DNS 解析（除非配置 `proxy_dns`，此时 DNS 查询也通过代理转发）
 
 ---
 
@@ -754,8 +839,11 @@ Firefox 设置方法：
 
 | 知识点 | 要点 |
 | --- | --- |
-| SOCKS5 代理 | 一条隧道即可访问目标主机所在网络的所有服务，无需逐一配置端口映射 |
-| proxychains | 强制让任意程序的网络流量通过 SOCKS5 代理转发；只能用 `-sT` 扫描，速度较慢 |
+| SOCKS5 协议 | 工作在会话层的通用代理协议（SOCKS 第5版），支持 TCP+UDP、多种认证、IPv6；不解析应用层协议，"万能代理" |
+| SOCKS5 与 HTTP 代理区别 | HTTP 代理只转发 HTTP/HTTPS 流量；SOCKS5 不挑协议，RDP/SMB/SSH 等都能通过 |
+| SOCKS5 工作流程 | 客户端 → 握手协商认证 → CONNECT 请求指定目标地址:端口 → 代理连接目标并透传数据 |
+| frp 中的 SOCKS5 插件 | frpc 内嵌启动 SOCKS5 服务端（plugin），接收外部请求后在本地发起实际连接，实现"一条隧道访问整个内网" |
+| proxychains | 通过 LD_PRELOAD 拦截 connect() 调用，强制任意程序走 SOCKS5 代理；限制：仅 TCP、nmap 只能 `-sT`、速度较慢 |
 | nps | 提供 Web 管理界面的内网穿透工具，操作直观 |
 | SSH 隧道 | `-R` 远程转发（暴露本地端口）、`-D` 动态转发（SOCKS5 代理），零依赖临时使用 |
 
@@ -1277,15 +1365,52 @@ Get-SmbServerConfiguration | Select-Object RequireSecuritySignature, EnableSecur
 # 预期：RequireSecuritySignature = True
 ```
 
-**第二步：将高权限账户加入 Protected Users 组**（域环境）
+**第二步：限制 NTLM 网络认证（工作组环境下的 PtH 防御）**
+
+> 💡 **Protected Users 组**是 AD 域安全组，只存在于域控上，工作组环境没有该组。工作组下防御 PtH 的核心思路是：**限制高权限账户的 NTLM 网络登录**，使窃取的哈希无法通过网络认证使用。
 
 ```powershell
-# 在域控上执行
-Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"
-Get-ADGroupMember -Identity "Protected Users" | Select-Object Name, SamAccountName
+# 在 Win11 实验主机上以管理员身份运行 PowerShell
+
+# ---- 1. 通过本地安全策略，禁止管理员账户的网络登录 ----
+# 这是最有效的工作组 PtH 防御：即使拿到哈希，也无法通过 SMB/WinRM 等协议远程登录
+# "从网络访问此计算机"策略中移除 Administrators 组
+# 注意：需要先备份当前策略，再修改
+secedit /export /cfg C:\secpol_backup.cfg
+
+# 用记事本打开导出的策略文件，找到 SeDenyNetworkLogonRight 行
+notepad C:\secpol_backup.cfg
+# 在该行末尾添加 *,S-1-5-32-544（即 Administrators 组的 SID），变为：
+# SeDenyNetworkLogonRight = *S-1-5-32-544
+
+# 导入修改后的策略
+secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol_backup.cfg /areas USER_RIGHTS
+
+# ---- 2. 禁用 NTLMv1，只允许更安全的 NTLMv2 ----
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "LmCompatibilityLevel" -Value 5 -Type DWord
+# 值=5 表示"仅发送 NTLMv2 响应，拒绝 NTLM 和 NTLMv1"
+
+# ---- 3. 禁用本地账户的远程凭据使用 ----
+# 防止 PtH 结合 PsExec/WMI 等工具进行横向移动
+New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LocalAccountTokenFilterPolicy" -Value 0 -PropertyType DWord -Force
+# 默认值=1（允许本地管理员远程提权），设为 0 后本地管理员远程连接仅获得标准权限
+
+# ---- 4. 验证策略生效 ----
+# 查看 NTLM 兼容级别
+Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "LmCompatibilityLevel"
+# 预期：LmCompatibilityLevel = 5
+
+# 查看本地账户远程过滤策略
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LocalAccountTokenFilterPolicy"
+# 预期：LocalAccountTokenFilterPolicy = 0
 ```
 
-> 💡 **效果**：组成员不能使用 NTLM 认证（强制 Kerberos）、不能使用缓存凭据。直接阻断 Pass-the-Hash。
+> 💡 **为什么这样能防 PtH？**
+> - `SeDenyNetworkLogonRight`：从根源上阻止管理员账户通过网络（SMB、WinRM、RDP）认证，哈希虽然泄露但**无法用于远程登录**
+> - `LmCompatibilityLevel = 5`：强制使用 NTLMv2，淘汰不安全的旧版 NTLM 协议
+> - `LocalAccountTokenFilterPolicy = 0`：即使攻击者绕过了上面的限制，本地管理员远程连接也无法获得完整管理员权限（UAC 远程限制）
+>
+> 💡 **域环境补充**：如果在 AD 域中，还可以将高权限账户加入 **Protected Users 组**（`Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"`），该组成员强制使用 Kerberos 认证、禁止 NTLM 和缓存凭据，直接阻断 PtH。但该组仅限域环境使用。
 
 **第三步：配置防火墙限制横向移动**
 
@@ -1310,19 +1435,7 @@ New-NetFirewallRule -DisplayName "Block-FRP-Outbound" -Direction Outbound `
   -Protocol TCP -RemotePort 7000 -Action Block
 ```
 
-**第四步：重置 krbtgt 密码**（域环境，使黄金票据失效）
-
-```powershell
-# 必须更改两次（AD 保留上一次密码）
-$pwd1 = ConvertTo-SecureString "N3wKrbtgt@2025!A" -AsPlainText -Force
-$pwd2 = ConvertTo-SecureString "N3wKrbtgt@2025!B" -AsPlainText -Force
-
-Set-ADAccountPassword -Identity krbtgt -NewPassword $pwd1 -Reset
-Start-Sleep -Seconds 60
-Set-ADAccountPassword -Identity krbtgt -NewPassword $pwd2 -Reset
-```
-
-**第五步：禁用不必要的服务**
+**第四步：禁用不必要的服务**
 
 ```powershell
 # 如果不需要 WinRM
@@ -1337,12 +1450,13 @@ net share C$ /delete
 net share ADMIN$ /delete
 ```
 
-**第六步：验证加固效果**
+**第五步：验证加固效果**
 
 ```bash
 # 在验证环境中，通过 SOCKS5 代理重新尝试 PtH
 proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
-# 预期：STATUS_ACCESS_DENIED（Protected Users 生效）或 SMB 签名强制拒绝中继
+# 预期：STATUS_LOGON_FAILURE 或 STATUS_ACCESS_DENIED
+# 原因：SeDenyNetworkLogonRight 阻止了管理员的网络登录 + LocalAccountTokenFilterPolicy 限制了远程提权
 ```
 
 ---
@@ -1354,8 +1468,10 @@ proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
 | 纵深防御 | 网络隔离→身份安全→端点安全→监控检测→应急响应 |
 | Tier模型 | Tier 0（域控）/ Tier 1（服务器）/ Tier 2（工作站） |
 | SMB签名 | 防御 SMB 中继攻击 |
-| Protected Users | 禁止 NTLM 认证，直接阻断 PtH |
-| krbtgt重置 | 更改两次使黄金票据失效 |
+| NTLM 网络登录限制 | 工作组环境下防御 PtH 的核心：`SeDenyNetworkLogonRight` 禁止管理员网络登录 |
+| NTLMv2 强制 | `LmCompatibilityLevel=5` 淘汰旧版 NTLM |
+| LocalAccountTokenFilterPolicy | 设为 0 阻止本地管理员远程提权 |
+| Protected Users（域环境） | 禁止 NTLM 认证，直接阻断 PtH |
 | 防火墙策略 | 限制入站来源（IP白名单）、阻止 frp 出站连接 |
 | 最小权限 | 禁用不必要的服务和默认共享 |
 
@@ -1399,8 +1515,10 @@ proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
 | 获取哈希 | `proxychains impacket-secretsdump administrator:'密码'@127.0.0.1` |
 | PtH 攻击 | `proxychains nxc smb 127.0.0.1 -u admin -H '<HASH>'` 或 `proxychains impacket-wmiexec -hashes :HASH admin@127.0.0.1` |
 | SMB 签名 | `Set-ItemProperty "LanmanServer\Parameters" "RequireSecuritySignature" 1` |
-| Protected Users | `Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"` |
-| krbtgt 重置 | `Set-ADAccountPassword -Identity krbtgt -NewPassword $pwd -Reset`（两次） |
+| 限制管理员网络登录 | 安全策略：`SeDenyNetworkLogonRight` 添加 Administrators SID（`*S-1-5-32-544`） |
+| 强制 NTLMv2 | `Set-ItemProperty "...\Lsa" "LmCompatibilityLevel" 5` |
+| 禁止本地管理员远程提权 | `Set-ItemProperty "...\Policies\System" "LocalAccountTokenFilterPolicy" 0` |
+| Protected Users（域环境） | `Add-ADGroupMember -Identity "Protected Users" -Members "Administrator"` |
 
 ## 常见错误排查表
 
@@ -1443,7 +1561,7 @@ proxychains nxc smb 127.0.0.1 -u administrator -H '<NTLM_HASH>'
 
 1. **内网穿透检测**：frp 客户端需要主动连接外部服务器的 7000 端口。作为安全运维人员，如何在企业网络中检测和阻止 frp/nps 等内网穿透工具的使用？请列举至少三种检测方法。
 
-2. **Pass-the-Hash防御**：Protected Users 组可以阻断 PtH，但加入该组后管理员在某些场景下可能无法正常工作。如何在安全性和可用性之间取得平衡？
+2. **Pass-the-Hash防御**：本课使用 `SeDenyNetworkLogonRight` + `LocalAccountTokenFilterPolicy` 在工作组环境下防御 PtH。如果环境中同时有需要远程管理的合法管理员账户，这种"禁止管理员网络登录"的做法会带来什么问题？如何在安全性和可用性之间取得平衡？
 
 3. **横向移动溯源**：攻击者通过 frp 隧道从外部访问内网，内网服务器看到的连接来源是 frp 客户端的 IP 而非攻击者的真实 IP。在真实企业环境中，如何有效溯源此类攻击？
 
