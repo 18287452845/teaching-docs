@@ -459,7 +459,8 @@ sudo mysql -u root -p123456
 FLUSH TABLES WITH READ LOCK;
 
 -- 查看当前 binlog 位置（关键信息！）
-SHOW BINARY LOG STATUS;
+--SHOW BINARY LOG STATUS;
+SHOW MASTER STATUS;
 ```
 
 记录输出中的 File 和 Position，例如：
