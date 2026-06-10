@@ -793,16 +793,21 @@ sudo vim /etc/proxychains4.conf
 **第三步：通过 SOCKS5 代理访问 Win11 phpStudy**
 
 ```bash
-# 通过代理访问 Win11 实验主机的 Web 服务
+# 通过代理访问 Win11 实验主机的 Web 服务（curl 可以用 127.0.0.1）
 proxychains curl http://127.0.0.1
 # 预期：返回 phpStudy 页面（SOCKS5 代理从 Win11 本地发起连接，127.0.0.1 就是 Win11 实验主机）
 
 # 通过代理扫描 Win11 实验主机的常见端口
-proxychains nmap -sT -p 80,135,139,445 127.0.0.1
-# 预期：80 端口 open；其他端口是否开放取决于本机服务状态
+# ⚠️ 注意：必须使用 Win11 的实际内网 IP，不能用 127.0.0.1
+#    原因：nmap 对 127.0.0.1 有内部优化，会绕过 proxychains 直接扫 Kali 本机
+proxychains nmap -sT -Pn -n -p 80,135,139,445 <Win11内网IP>
+# 预期：80 端口 open；其他端口是否开放取决于 Win11 的服务状态
 ```
 
-> 💡 **为什么用 127.0.0.1？**：SOCKS5 代理的连接是从 frpc（Win11 实验主机）本地发起的。当 proxychains 把请求发给 SOCKS5 代理时，代理在 Win11 上向 127.0.0.1 发起连接——即 Win11 实验主机自身。
+> 💡 **关于目标地址**：
+> - `curl` 等普通工具可以正常通过代理访问 `127.0.0.1`（对 SOCKS5 代理来说，127.0.0.1 就是 Win11 实验主机）
+> - `nmap` 对 `127.0.0.1` 有内部 loopback 优化，会绕过 proxychains 的 hook，实际扫的是 Kali 本机。所以 **nmap 必须填 Win11 的实际 IP**（如 `10.160.64.24`、`192.168.x.x`），在 Win11 上用 `ipconfig` 查看
+> - 两种方式效果相同：frpc 在 Win11 本地发起连接，无论目标是 127.0.0.1 还是 Win11 自己的内网 IP，连的都是同一台机器
 
 **第四步：浏览器通过 SOCKS5 代理**
 
@@ -1023,12 +1028,13 @@ nmap -sV -p 10002,10080 <CVM公网IP>
 ```bash
 # 确认 proxychains 配置：socks5 <CVM公网IP> 10080
 
-# 扫描目标主机的常用端口（SOCKS5 从 Win11 本地发起，所以目标是 127.0.0.1）
-proxychains nmap -sT -p 80,135,139,445,3389,5985 127.0.0.1
+# 扫描 Win11 实验主机的常用端口（必须用实际内网 IP，不能用 127.0.0.1）
+proxychains nmap -sT -Pn -n -p 80,135,139,445,3389,5985 <Win11内网IP>
 
 # 预期输出：
 # PORT     STATE  SERVICE
 # 80/tcp   open   http
+# 135/tcp  open   msrpc
 # 其他端口是否开放取决于 Win11 实验主机的服务状态
 ```
 
@@ -1041,10 +1047,10 @@ proxychains nmap -sT -p 80,135,139,445,3389,5985 127.0.0.1
 
 ```bash
 # 通过代理检测 SMB 已知漏洞（如 EternalBlue MS17-010）
-proxychains nmap -sT --script smb-vuln* -p 445 127.0.0.1
+proxychains nmap -sT -Pn -n --script smb-vuln* -p 445 <Win11内网IP>
 
 # 通过代理枚举 SMB 共享和用户
-proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
+proxychains nmap -sT -Pn -n --script smb-enum-shares,smb-enum-users -p 445 <Win11内网IP>
 # 目的：发现可访问的共享和用户列表 → 为暴力破解和横向移动提供目标
 ```
 
@@ -1052,14 +1058,14 @@ proxychains nmap -sT --script smb-enum-shares,smb-enum-users -p 445 127.0.0.1
 
 ## 📝 任务三知识点总结
 
-| 知识点 | 要点 |
-| --- | --- |
-| 三个核心问题 | "我在哪"（网络位置）、"周围有什么"（目标发现）、"我能做什么"（权限评估） |
-| 三层收集体系 | 本机信息 → 网络邻居 → 主动扫描，由近及远、由被动到主动 |
-| 被动收集（不触发告警） | `ipconfig`、`route print`、`arp -a`、`netstat -an` |
-| 主动扫描（可能触发告警） | `nmap -sT`、`smb-vuln*`、`smb-enum-*` |
-| 两种扫描方式 | 直接扫映射端口（快但有限）vs SOCKS5 + proxychains（慢但完整） |
-| 攻击者视角 | 每条信息都在回答"下一步能攻击什么"——信息收集是攻击链的基础 |
+| 知识点          | 要点                                              |
+| ------------ | ----------------------------------------------- |
+| 三个核心问题       | "我在哪"（网络位置）、"周围有什么"（目标发现）、"我能做什么"（权限评估）         |
+| 三层收集体系       | 本机信息 → 网络邻居 → 主动扫描，由近及远、由被动到主动                  |
+| 被动收集（不触发告警）  | `ipconfig`、`route print`、`arp -a`、`netstat -an` |
+| 主动扫描（可能触发告警） | `nmap -sT`、`smb-vuln*`、`smb-enum-*`             |
+| 两种扫描方式       | 直接扫映射端口（快但有限）vs SOCKS5 + proxychains（慢但完整）      |
+| 攻击者视角        | 每条信息都在回答"下一步能攻击什么"——信息收集是攻击链的基础                 |
 
 ---
 
