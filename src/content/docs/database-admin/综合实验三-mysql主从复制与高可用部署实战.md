@@ -277,6 +277,8 @@ SHOW VARIABLES LIKE 'server_id';             -- 应为 1
 
 -- 查看当前 binlog 文件和位置（后面要用）
 SHOW BINARY LOG STATUS;
+
+SHOW MASTER STATUS;
 ```
 
 输出类似：
